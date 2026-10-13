@@ -30,7 +30,7 @@ pytest -q
 
 Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`).
 
-## O que já funciona (fases 1 a 6)
+## O que já funciona (fases 1 a 7)
 
 | Área | Recursos |
 |---|---|
@@ -41,6 +41,7 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Girar | 90° esquerda/direita, espelhar, endireitar (−45° a +45° com recorte automático), redimensionar |
 | Borrar | Pincel, retângulo ou elipse; gaussiano, mosaico ou tarja sólida (paleta de cores com RGB, ou cor original da área) |
 | Fundo | Remover fundo com IA (3 modelos), afinar/suavizar borda, descontaminar cor, fundo transparente, cor sólida ou **desfocado** (efeito retrato); modelo baixado uma vez, sob demanda; entra no lote |
+| Seleção por clique | Clique no objeto (MobileSAM) para escolher o que fica no Fundo, ou o que apagar na Marca d'água; Alt+clique / botão direito tira da seleção |
 | Ocultar rosto | Detecta rostos sozinho (YuNet) e aplica mosaico, embaçar ou tarja; sensibilidade e margem ajustáveis; entra no lote |
 | Marca d'água | Marque com pincel ou retângulo e remova com preenchimento rápido (Telea/Navier-Stokes) ou por IA (LaMa, modelo baixado sob demanda); um retângulo fixo entra no lote |
 | Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (clique para ver a foto original, clique de novo para voltar) |

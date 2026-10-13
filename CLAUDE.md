@@ -34,6 +34,9 @@ eggfotos/
                            blur_background / blur_background_auto: desfoca o que não é o objeto
     inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
                            remove_region (retângulo relativo, vai pro lote); só processa a região da máscara
+    segment.py             MobileSAM (ONNX): embed(img) [~0,5 s, cacheável] → predict(emb, pontos) [instantâneo];
+                           o encoder NÃO redimensiona: a foto vai com lado maior = 1024 e o decoder
+                           recebe orig_im_size = tamanho real; pontos relativos, rótulo 1/0
     faces.py               YuNet (cv2.FaceDetectorYN): detect_faces (caixas relativas + score) →
                            blur_boxes (sensibilidade, margem, tipo); blur_faces = as duas
     geometry.py            crop, crop_relative, crop_to_ratio, rotate, straighten, resize, downscale
@@ -45,7 +48,7 @@ eggfotos/
     runner.py              BatchRunner (ProcessPool, janela deslizante, cancelamento, log CSV)
   ui/                      PyQt6 — só monta parâmetros e chama core/pipeline
     main_window.py         janela, menus, prévias, commit no histórico
-    canvas.py              QGraphicsView: zoom, recorte, pincel, região
+    canvas.py              QGraphicsView: zoom, recorte, pincel, região, clique (TOOL_POINT, Alt/direito = "fora")
     panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Ocultar rosto, Marca d'água, ResizeDialog
     color_picker.py        paleta de cores (amostras + RGB + "Mais cores…"), usada em todos os botões de cor
     batch_dialog.py        diálogo de lote + StepEditor gerado a partir dos Params
@@ -88,6 +91,7 @@ tests/                     pytest do core e do pipeline
   (que o rembg instala, mas não é importado). Se a borda de cabelo/pelo ficar fraca, avaliar
   `pymatting.estimate_foreground_ml` (melhor, porém lento e com JIT na 1ª execução).
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
+- Seleção por cliques (MobileSAM) não é reproduzível em lote: o resultado entra no histórico sem step (como o pincel).
 - Botão Original é um interruptor (clique liga/desliga); ao editar ou trocar de aba ele desliga sozinho.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.
@@ -101,8 +105,8 @@ tests/                     pytest do core e do pipeline
 | — | Filtros vintage e de foto antiga (10) | feito |
 | 4 | Remoção de fundo (rembg: u2netp / isnet-general-use / BiRefNet-lite), refino de borda, descontaminação de cor, fundo transparente ou cor sólida, aba **Fundo**, operação `remover_fundo` no lote | feito, falta testar com foto real |
 | 5 | Desfoque de fundo (opção na aba Fundo, reusa `compute_matte`) e desfoque automático de rostos (aba **Ocultar rosto**, YuNet ~230 KB, ops `desfocar_fundo` e `desfocar_rostos`) | feito, falta testar com foto real |
-| 6 | Marca d'água: aba **Marca d'água** (pincel/retângulo acumulam uma máscara), Telea/Navier-Stokes sem modelo e LaMa (ONNX ~200 MB, baixado sob demanda); op `remover_marca_regiao` (1 retângulo) no lote | feito; **LaMa ainda não testado com o modelo real** (formato de saída detectado em execução) |
-| 7 | MobileSAM: seleção com um clique para máscara e fundo | — |
+| 6 | Marca d'água: aba **Marca d'água** (pincel/retângulo/clique acumulam uma máscara), Telea/Navier-Stokes sem modelo e LaMa (ONNX ~200 MB, baixado sob demanda); op `remover_marca_regiao` (1 retângulo) no lote | feito e testado com o modelo real |
+| 7 | MobileSAM: seleção por cliques na aba **Fundo** (alternativa à detecção automática; vira a máscara do fundo) e ferramenta "Clique" na aba **Marca d'água** | feito e testado com o modelo real |
 | 8 | Marca d'água em lote: máscara ancorada + estimativa multi-imagem / inversão de alpha | — |
 | 9 | (Opcional) inpainting por difusão com GPU (torch, diffusers) | — |
 

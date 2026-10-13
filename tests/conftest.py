@@ -47,3 +47,25 @@ def fake_faces(monkeypatch):
     boxes = [(0.1, 0.1, 0.2, 0.3, 0.95), (0.6, 0.5, 0.2, 0.3, 0.40)]
     monkeypatch.setattr(faces, "detect_faces", lambda img: list(boxes))
     return boxes
+
+
+@pytest.fixture
+def fake_sam(monkeypatch):
+    """MobileSAM falso: devolve sempre um quadrado de 60×60 px em volta do 1º ponto."""
+    from eggfotos.core import segment
+
+    class _Enc:
+        def run(self, _out, feeds):
+            return [np.zeros((1, 256, 64, 64), np.float32)]
+
+    class _Dec:
+        def run(self, _out, feeds):
+            H, W = (int(v) for v in feeds["orig_im_size"])
+            s = max(H, W) and 1024 / max(H, W)
+            x, y = feeds["point_coords"][0, 0] / s
+            m = np.full((1, 1, H, W), -5.0, np.float32)
+            m[0, 0, max(0, int(y) - 30):int(y) + 30, max(0, int(x) - 30):int(x) + 30] = 5.0
+            return [m, np.ones((1, 1), np.float32)]
+
+    monkeypatch.setattr(segment, "_session", lambda kind: _Enc() if kind == "encoder" else _Dec())
+    return segment

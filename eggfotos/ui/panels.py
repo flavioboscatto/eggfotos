@@ -430,6 +430,10 @@ class BackgroundPanel(QWidget):
     """Remover fundo: baixar modelo → detectar (lento, 1×) → refinar ao vivo → aplicar."""
     downloadRequested = pyqtSignal(str)
     detectRequested = pyqtSignal(str)
+    clickModeRequested = pyqtSignal()
+    clickUse = pyqtSignal()
+    clickClear = pyqtSignal()
+    clickExit = pyqtSignal()
     previewChanged = pyqtSignal(dict)
     applyRequested = pyqtSignal(dict)
     cancelRequested = pyqtSignal()
@@ -451,6 +455,24 @@ class BackgroundPanel(QWidget):
         self.btn_detect.setObjectName("primary")
         for w in (self.cmb_modelo, self.lbl_model, self.btn_download, self.btn_detect):
             f1.addWidget(w)
+        self.btn_click = QPushButton("Ou selecione por cliques…")
+        self.btn_click.setToolTip("Clique no objeto (MobileSAM). Bom quando a detecção automática erra.")
+        f1.addWidget(self.btn_click)
+        self.box_click = QWidget()
+        bc = QVBoxLayout(self.box_click)
+        bc.setContentsMargins(0, 0, 0, 0)
+        bc.addWidget(_hint("Clique no objeto. Clique esquerdo = é objeto; Alt+clique ou botão direito = "
+                           "não é objeto. Refine com mais cliques."))
+        row_c = QHBoxLayout()
+        self.btn_click_use = QPushButton("Usar seleção")
+        self.btn_click_use.setObjectName("primary")
+        self.btn_click_clear = QPushButton("Limpar cliques")
+        self.btn_click_exit = QPushButton("Sair")
+        for b in (self.btn_click_use, self.btn_click_clear, self.btn_click_exit):
+            row_c.addWidget(b)
+        bc.addLayout(row_c)
+        self.box_click.setVisible(False)
+        f1.addWidget(self.box_click)
         lay.addWidget(g1)
 
         self.g2 = QGroupBox("2. Refinar")
@@ -507,6 +529,10 @@ class BackgroundPanel(QWidget):
         self.cmb_modelo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
         self.btn_download.clicked.connect(lambda: self.downloadRequested.emit(self.modelo()))
         self.btn_detect.clicked.connect(lambda: self.detectRequested.emit(self.modelo()))
+        self.btn_click.clicked.connect(self.clickModeRequested)
+        self.btn_click_use.clicked.connect(self.clickUse)
+        self.btn_click_clear.clicked.connect(self.clickClear)
+        self.btn_click_exit.clicked.connect(self.clickExit)
         self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
         self.btn_cancel.clicked.connect(self._on_cancel)
         self.set_detected(False)
@@ -538,9 +564,14 @@ class BackgroundPanel(QWidget):
         self.g2.setEnabled(detected)
         self.btn_apply.setEnabled(detected)
 
+    def set_click_mode(self, on: bool) -> None:
+        self.box_click.setVisible(on)
+        self.btn_click.setVisible(not on)
+
     def reset(self) -> None:
         self._timer.stop()
         self.set_detected(False)
+        self.set_click_mode(False)
 
     def _on_cancel(self) -> None:
         self.reset()
@@ -695,7 +726,8 @@ class WatermarkPanel(QWidget):
         f1 = QVBoxLayout(g1)
         self.grp_tool = QButtonGroup(self)
         for i, (key, text) in enumerate((("pincel", "Pincel (pinte sobre a marca)"),
-                                         ("retangulo", "Retângulo (arraste)"))):
+                                         ("retangulo", "Retângulo (arraste)"),
+                                         ("clique", "Clique no objeto (MobileSAM; Alt+clique tira)"))):
             rb = QRadioButton(text)
             rb.setProperty("key", key)
             self.grp_tool.addButton(rb, i)

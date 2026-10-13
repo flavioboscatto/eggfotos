@@ -23,6 +23,7 @@ TOOL_NAV = "navegar"
 TOOL_CROP = "recortar"
 TOOL_BRUSH = "pincel"
 TOOL_REGION = "regiao"
+TOOL_POINT = "ponto"
 
 ZOOM_MIN, ZOOM_MAX = 0.02, 32.0
 
@@ -33,6 +34,7 @@ class ImageCanvas(QGraphicsView):
     cropAccepted = pyqtSignal()             # Enter na ferramenta de recorte
     brushStrokeFinished = pyqtSignal(object)  # máscara np.uint8 HxW
     regionSelected = pyqtSignal(object)     # (x, y, w, h) em pixels
+    pointClicked = pyqtSignal(float, float, bool)  # x, y em pixels; True = "é objeto" (esquerdo)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,6 +79,9 @@ class ImageCanvas(QGraphicsView):
         self._stroke_path: QPainterPath | None = None
         self._stroke_item: QGraphicsPathItem | None = None
         self._cursor_item: QGraphicsEllipseItem | None = None
+
+        # pontos (seleção por clique)
+        self._point_items: list = []
 
         # região
         self.region_shape = "retangulo"
@@ -188,7 +193,26 @@ class ImageCanvas(QGraphicsView):
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             cursor = Qt.CursorShape.BlankCursor if self._tool == TOOL_BRUSH else Qt.CursorShape.CrossCursor
+            if self._tool == TOOL_POINT:
+                cursor = Qt.CursorShape.PointingHandCursor
             self.viewport().setCursor(cursor)
+
+    def set_point_markers(self, points: list[tuple[float, float, bool]]) -> None:
+        """Desenha as bolinhas dos cliques (verde = objeto, vermelha = fora). Coordenadas em pixels."""
+        self.clear_point_markers()
+        r = max(4.0, 0.006 * max(self._image_size or (1, 1)))
+        for x, y, positive in points:
+            item = QGraphicsEllipseItem(QRectF(x - r, y - r, 2 * r, 2 * r))
+            item.setBrush(QBrush(QColor(60, 200, 90) if positive else QColor(235, 60, 60)))
+            item.setPen(self._cosmetic_pen("#ffffff", 1.5))
+            item.setZValue(20)
+            self._scene.addItem(item)
+            self._point_items.append(item)
+
+    def clear_point_markers(self) -> None:
+        for item in self._point_items:
+            self._scene.removeItem(item)
+        self._point_items = []
 
     def set_brush_size(self, size: int) -> None:
         self.brush_size = max(1, int(size))
@@ -325,6 +349,14 @@ class ImageCanvas(QGraphicsView):
     # ================================================================ eventos
     def mousePressEvent(self, event):
         self.setFocus()
+        if (self._tool == TOOL_POINT and self.has_image and not self._space_pan
+                and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton)):
+            p = self._clamp(self._scene_pos(event))
+            alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            positive = event.button() == Qt.MouseButton.LeftButton and not alt
+            self.pointClicked.emit(p.x(), p.y(), positive)  # Alt+clique ou botão direito = "fora"
+            event.accept()
+            return
         if (self._space_pan or self._tool == TOOL_NAV or not self.has_image
                 or event.button() != Qt.MouseButton.LeftButton):
             return super().mousePressEvent(event)
@@ -355,7 +387,7 @@ class ImageCanvas(QGraphicsView):
         event.accept()
 
     def mouseMoveEvent(self, event):
-        if not self.has_image or self._space_pan or self._tool == TOOL_NAV:
+        if not self.has_image or self._space_pan or self._tool in (TOOL_NAV, TOOL_POINT):
             return super().mouseMoveEvent(event)
         raw = self._scene_pos(event)
         if self._tool == TOOL_BRUSH:
@@ -377,7 +409,7 @@ class ImageCanvas(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):
-        if (not self.has_image or self._space_pan or self._tool == TOOL_NAV
+        if (not self.has_image or self._space_pan or self._tool in (TOOL_NAV, TOOL_POINT)
                 or event.button() != Qt.MouseButton.LeftButton):
             return super().mouseReleaseEvent(event)
         if self._tool == TOOL_CROP:

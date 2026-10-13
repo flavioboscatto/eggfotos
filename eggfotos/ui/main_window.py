@@ -14,14 +14,14 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__
-from ..core import background, faces, geometry, inpaint
+from ..core import background, faces, geometry, inpaint, segment
 from ..core.blur import blur_with_mask
 from ..core.history import History
 from ..core.image_io import OPEN_FILTER, is_supported, load_image, save_image
 from ..pipeline.operations import apply_step, get_operation
 from ..pipeline.recipe import Recipe, recipes_dir, safe_filename
 from .batch_dialog import BatchDialog
-from .canvas import TOOL_BRUSH, TOOL_CROP, TOOL_NAV, TOOL_REGION, ImageCanvas
+from .canvas import TOOL_BRUSH, TOOL_CROP, TOOL_NAV, TOOL_POINT, TOOL_REGION, ImageCanvas
 from .workers import TaskWorker
 from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, ResizeDialog, WatermarkPanel
 
@@ -51,6 +51,13 @@ class MainWindow(QMainWindow):
         self._face_uid: int | None = None
         self._wm_mask: np.ndarray | None = None   # marcação da aba Marca d'água (resolução total)
         self._wm_rects: list[tuple[float, float, float, float]] = []  # retângulos relativos
+        self._matte_manual = False                # máscara veio de cliques (não reproduzível em lote)
+        self._sam_emb: segment.Embedding | None = None  # embedding do MobileSAM da foto atual
+        self._sam_uid: int | None = None
+        self._sam_points: list[tuple[float, float, int]] = []  # cliques do modo Fundo (relativos)
+        self._sam_pixels: list[tuple[float, float, bool]] = []  # os mesmos, em pixels (marcadores)
+        self._sam_mask: np.ndarray | None = None
+        self._click_busy = False
         self._wm_strokes = 0
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
         self._task: TaskWorker | None = None
@@ -199,6 +206,11 @@ class MainWindow(QMainWindow):
         bp.previewChanged.connect(self._preview_background)
         bp.applyRequested.connect(self._apply_background)
         bp.cancelRequested.connect(self._cancel_preview)
+        bp.clickModeRequested.connect(self._bg_click_start)
+        bp.clickUse.connect(self._bg_click_use)
+        bp.clickClear.connect(self._bg_click_clear)
+        bp.clickExit.connect(self._sam_reset)
+        self.canvas.pointClicked.connect(self._on_point_clicked)
 
         fp = self.faces_panel
         fp.downloadRequested.connect(self._download_face_model)
@@ -253,6 +265,7 @@ class MainWindow(QMainWindow):
         self._face_boxes = self._face_uid = None
         self.faces_panel.reset()
         self._wm_reset()
+        self._sam_reset()
         if self.tabs.currentIndex() == TAB_FILTERS:
             self.filters_panel.set_source(img)
         else:
@@ -333,6 +346,7 @@ class MainWindow(QMainWindow):
             self._uncheck_original()
             self.canvas.set_image(self.image)
         self._cancel_preview()
+        self._sam_reset()
         self.adjust_panel.reset()
         self.filters_panel.reset()
         self.crop_panel.reset_angle()
@@ -471,6 +485,7 @@ class MainWindow(QMainWindow):
     # ============================================================== fundo
     def _drop_matte(self) -> None:
         self._matte = self._proxy_matte = self._matte_key = None
+        self._matte_manual = False
         self.background_panel.reset()
 
     def _run_task(self, text: str, func: Callable[[], object], on_done: Callable[[object], None]) -> None:
@@ -531,6 +546,7 @@ class MainWindow(QMainWindow):
             if self.history.current_uid != key[0]:  # a foto mudou enquanto detectava
                 return
             self._matte, self._matte_key = matte, key
+            self._matte_manual = False
             self._proxy_matte = None
             self.background_panel.set_detected(True)
             self._preview_background(self.background_panel.values())
@@ -538,8 +554,9 @@ class MainWindow(QMainWindow):
         self._run_task("Detectando o objeto…", lambda: background.compute_matte(img, modelo), done)
 
     def _matte_ready(self, modelo: str) -> bool:
-        return (self._matte is not None
-                and self._matte_key == (self.history.current_uid, modelo))
+        return (self._matte is not None and self._matte_key is not None
+                and self._matte_key[0] == self.history.current_uid
+                and (self._matte_manual or self._matte_key[1] == modelo))
 
     def _background_step(self, values: dict) -> dict:
         """Step reproduzível correspondente ao estado do painel Fundo."""
@@ -573,7 +590,7 @@ class MainWindow(QMainWindow):
     def _apply_background(self, values: dict) -> None:
         if self.image is None or not self._matte_ready(values["modelo"]):
             return
-        step = self._background_step(values)
+        step = None if self._matte_manual else self._background_step(values)  # cliques: só nesta foto
         label = "Desfocar fundo" if values["fundo"] == "desfoque" else "Remover fundo"
         img, matte = self.image, self._matte
         self._run_task("Aplicando…", lambda: self._render_background(img, matte, values),
@@ -629,6 +646,122 @@ class MainWindow(QMainWindow):
         self._run_task("Aplicando…", lambda: faces.blur_boxes(img, boxes, **values),
                        lambda out: self.commit(out, "Ocultar rostos", step))
 
+    # ================================================ seleção por cliques (SAM)
+    def _show_mask_overlay(self, mask: np.ndarray, color: tuple[int, int, int]) -> None:
+        """Pinta a máscara em cor translúcida sobre a prévia da foto."""
+        def render():
+            ph, pw = self.proxy.shape[:2]
+            m = cv2.resize(mask, (pw, ph), interpolation=cv2.INTER_NEAREST) > 0
+            out = self.proxy.copy()
+            if out.shape[2] == 3:
+                out[m] = (out[m].astype(np.float32) * 0.4 + np.array(color, np.float32) * 0.6).astype(np.uint8)
+            self.canvas.set_preview(out, 1.0 / self.proxy_scale)
+        self._run_preview(render)
+
+    def _sam_reset(self) -> None:
+        """Sai do modo de cliques e limpa marcadores/seleção temporária."""
+        self._sam_points, self._sam_pixels, self._sam_mask = [], [], None
+        self.canvas.clear_point_markers()
+        self.background_panel.set_click_mode(False)
+        if self.tabs.currentIndex() == TAB_BACKGROUND and self.canvas.tool() == TOOL_POINT:
+            self.canvas.set_tool(TOOL_NAV)
+            self._cancel_preview()
+
+    def _ensure_sam_models(self, then: Callable[[], None]) -> None:
+        """Garante os modelos (pede confirmação para baixar) e segue com `then`."""
+        if segment.model_available():
+            then()
+            return
+        r = QMessageBox.question(
+            self, APP_NAME,
+            "Baixar os modelos de seleção por clique (MobileSAM, ~45 MB)?\n\n"
+            "Origem: huggingface.co/Acly/MobileSAM\n"
+            f"Destino: {background.models_dir()}\n\nÉ feito uma única vez.",
+        )
+        if r == QMessageBox.StandardButton.Yes:
+            self._run_task("Baixando os modelos de seleção…", segment.download_models,
+                           lambda _: then())
+
+    def _sam_segment(self, points: list, then: Callable[[np.ndarray], None]) -> None:
+        """Calcula a máscara dos pontos (embedding só na 1ª vez por foto) numa thread."""
+        if self.image is None or self._click_busy:
+            return
+        img, uid = self.image, self.history.current_uid
+        cached = self._sam_emb if self._sam_uid == uid else None
+
+        def job():
+            emb = cached if cached is not None else segment.embed(img)
+            return emb, segment.predict(emb, points)
+
+        def done(result):
+            emb, mask = result
+            if self.history.current_uid != uid:
+                return
+            self._sam_emb, self._sam_uid = emb, uid
+            then(mask)
+
+        self._run_task("Analisando a foto…" if cached is None else "Selecionando…", job, done)
+
+    def _on_point_clicked(self, x: float, y: float, positive: bool) -> None:
+        if self.image is None:
+            return
+        H, W = self.image.shape[:2]
+        tab = self.tabs.currentIndex()
+        if tab == TAB_BACKGROUND:
+            self._sam_points.append((x / W, y / H, 1 if positive else 0))
+            self._sam_pixels.append((x, y, positive))
+            self._ensure_sam_models(self._bg_click_run)
+        elif tab == TAB_WATERMARK:
+            def go():
+                self._sam_segment([(x / W, y / H, 1)], lambda m: self._wm_click_done(m, positive))
+            self._ensure_sam_models(go)
+
+    # --- aba Fundo
+    def _bg_click_start(self) -> None:
+        if self.image is None:
+            return
+        self._sam_points, self._sam_pixels, self._sam_mask = [], [], None
+        self.background_panel.set_click_mode(True)
+        self.canvas.set_tool(TOOL_POINT)
+
+    def _bg_click_run(self) -> None:
+        if not self._sam_points:
+            return
+        pts = list(self._sam_points)
+
+        def done(mask):
+            if pts != self._sam_points:  # chegou outro clique enquanto calculava
+                return
+            self._sam_mask = mask
+            self.canvas.set_point_markers(self._sam_pixels)
+            self._show_mask_overlay(mask, (60, 140, 255))
+
+        self._sam_segment(pts, done)
+
+    def _bg_click_clear(self) -> None:
+        self._sam_points, self._sam_pixels, self._sam_mask = [], [], None
+        self.canvas.clear_point_markers()
+        self._cancel_preview()
+
+    def _bg_click_use(self) -> None:
+        if self._sam_mask is None or self.image is None:
+            self.statusBar().showMessage("Clique no objeto primeiro.", 3000)
+            return
+        self._matte, self._proxy_matte = self._sam_mask, None
+        self._matte_key = (self.history.current_uid, self.background_panel.modelo())
+        self._matte_manual = True
+        self.background_panel.set_detected(True)
+        self._sam_reset()
+        self._preview_background(self.background_panel.values())
+
+    # --- aba Marca d'água
+    def _wm_click_done(self, mask: np.ndarray, positive: bool) -> None:
+        if positive:
+            self._wm_add_mask(mask, brush=True)
+        elif self._wm_mask is not None:  # Alt+clique: tira o objeto da marcação
+            self._wm_mask = np.where(mask > 0, 0, self._wm_mask).astype(np.uint8)
+            self._wm_show()
+
     # ======================================================== marca d'água
     def _wm_reset(self) -> None:
         self._wm_mask = None
@@ -643,9 +776,12 @@ class MainWindow(QMainWindow):
     def _sync_wm_tool(self) -> None:
         if self.tabs.currentIndex() != TAB_WATERMARK:
             return
-        if self.wm_panel.tool() == "pincel":
+        tool = self.wm_panel.tool()
+        if tool == "pincel":
             self.canvas.set_tool(TOOL_BRUSH)
             self.canvas.set_brush_size(self.wm_panel.brush_size())
+        elif tool == "clique":
+            self.canvas.set_tool(TOOL_POINT)
         else:
             self.canvas.region_shape = "retangulo"
             self.canvas.set_tool(TOOL_REGION)
@@ -662,16 +798,7 @@ class MainWindow(QMainWindow):
         """Mostra a marcação em vermelho translúcido sobre a foto."""
         if self._wm_mask is None or self.image is None:
             return
-        mask = self._wm_mask
-
-        def render():
-            ph, pw = self.proxy.shape[:2]
-            m = cv2.resize(mask, (pw, ph), interpolation=cv2.INTER_NEAREST) > 0
-            out = self.proxy.copy()
-            red = np.array([255, 40, 40], np.float32)
-            out[m] = (out[m][..., :3] * 0.4 + red * 0.6).astype(np.uint8) if out.shape[2] == 3 else out[m]
-            self.canvas.set_preview(out, 1.0 / self.proxy_scale)
-        self._run_preview(render)
+        self._show_mask_overlay(self._wm_mask, (255, 40, 40))
 
     def _wm_clear(self) -> None:
         self._wm_reset()
