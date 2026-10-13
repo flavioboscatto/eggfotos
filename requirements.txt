@@ -1,0 +1,8 @@
+PyQt6>=6.5
+numpy>=1.24
+# versão "headless" evita conflito dos plugins Qt do OpenCV com o PyQt6
+opencv-python-headless>=4.8
+Pillow>=10.0
+# remoção de fundo (fase 4); os modelos .onnx são baixados sob demanda, fora do projeto
+rembg>=2.0
+onnxruntime>=1.17

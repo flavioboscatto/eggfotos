@@ -1,0 +1,67 @@
+# EggFotos
+
+Editor de fotos desktop (uso pessoal) com ajustes, filtros com miniaturas,
+recorte, endireitar, ferramenta de borrar e **processamento em lote** por pasta.
+
+## Instalação (Windows / PowerShell)
+
+```powershell
+cd "$HOME\Documents\EggFotos"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+```
+
+> Se o PowerShell bloquear o `Activate.ps1`, rode uma vez:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+
+## Executar
+
+```powershell
+python main.py
+python main.py "C:\caminho\foto.jpg"   # já abre uma foto
+```
+
+## Testes
+
+```powershell
+pytest -q
+```
+
+Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`).
+
+## O que já funciona (fases 1 a 5)
+
+| Área | Recursos |
+|---|---|
+| Arquivo | Abrir (JPG, PNG, WEBP, BMP, TIFF), arrastar e soltar, Salvar / Salvar como, qualidade JPG/WEBP, mantém EXIF e perfil de cor, corrige a orientação da câmera |
+| Ajustes | Exposição, brilho, contraste, realces, sombras, saturação, temperatura, nitidez, com prévia ao vivo |
+| Filtros | 28 filtros (inclui 10 vintage/foto antiga: Foto antiga, Sépia envelhecido, Daguerreótipo, Polaroid, Anos 70, Kodachrome, Cross process, Filme P&B clássico, Filme 8mm, Papel amarelado) com **miniatura da própria foto**, intensidade 0–100% e prévia |
+| Recortar | Livre ou proporção fixa (1:1, 4:3, 3:2, 16:9…), mover a seleção, Enter aplica |
+| Girar | 90° esquerda/direita, espelhar, endireitar (−45° a +45° com recorte automático), redimensionar |
+| Borrar | Pincel, retângulo ou elipse; gaussiano, mosaico ou tarja sólida |
+| Fundo | Remover fundo com IA (3 modelos), afinar/suavizar borda, descontaminar cor, fundo transparente, cor sólida ou **desfocado** (efeito retrato); modelo baixado uma vez, sob demanda; entra no lote |
+| Rostos | Detecta rostos sozinho (YuNet) e aplica mosaico, desfoque ou tarja; sensibilidade e margem ajustáveis; entra no lote |
+| Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (segure para comparar) |
+| Lote | Pasta de entrada (com subpastas), receita de passos, prévia em 3 fotos, formato de saída, sufixo, processos paralelos, pular já processadas, log CSV |
+| Receitas | "Editar → Salvar edições como receita" transforma o que você fez na foto aberta numa receita para o lote |
+
+## Atalhos
+
+| Atalho | Ação |
+|---|---|
+| Ctrl+O / Ctrl+S / Ctrl+Shift+S | Abrir / Salvar / Salvar como |
+| Ctrl+Z / Ctrl+Y | Desfazer / Refazer |
+| Ctrl+B | Processar pasta (lote) |
+| Ctrl+R / Ctrl+Shift+R | Girar 90° direita / esquerda |
+| Ctrl+0 / Ctrl+1 | Ajustar à janela / 100% |
+| Roda do mouse | Zoom |
+| Segurar Espaço | Mão para mover a foto (em qualquer ferramenta) |
+| Enter / Esc | Aplicar / cancelar recorte |
+
+## Onde ficam as coisas
+
+- Modelos de IA (fundo e rostos): `~/.eggfotos/modelos` (baixados pelos botões das abas Fundo e Rostos)
+- Receitas salvas: `%USERPROFILE%\.eggfotos\receitas\*.json`
+- Saída do lote: por padrão `<pasta de entrada>\EggFotos_saida` (os originais nunca são alterados)
+- Log de cada lote: `eggfotos_log_AAAAMMDD_HHMMSS.csv` dentro da pasta de saída (abre no Excel)
