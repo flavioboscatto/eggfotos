@@ -33,7 +33,9 @@ eggfotos/
                            descontaminação, fundo transparente/cor); remove_background = as duas
                            blur_background / blur_background_auto: desfoca o que não é o objeto
     inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
-                           remove_region (retângulo relativo, vai pro lote); só processa a região da máscara
+                           remove_region (retângulo relativo, vai pro lote); só processa a região da máscara.
+                           LaMa roda em janelas de 512 px REAIS (até 12; marcas enormes caem no método reduzido)
+                           e restore_grain recoloca o grão do entorno (semente fixa, parâmetro `grao`)
     watermark.py           modelos de marca em ~/.eggfotos/marcas (env EGGFOTOS_MARCAS substitui):
                            MaskTemplate (marcação ancorada ao canto, tamanho/margens ÷ largura da foto,
                            + inpaint) e AlphaTemplate (estima α de marca translúcida branca/preta em

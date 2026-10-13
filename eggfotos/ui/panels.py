@@ -762,8 +762,11 @@ class WatermarkPanel(QWidget):
         f2.addRow("Método", self.cmb_metodo)
         f2.addRow(self.lbl_model)
         f2.addRow(self.btn_download)
+        self.chk_grao = QCheckBox("Recolocar o grão da foto no trecho preenchido")
+        self.chk_grao.setChecked(True)
         f2.addRow("Expandir a marcação", self.sl_expandir)
         f2.addRow("Raio (métodos rápidos)", self.sl_raio)
+        f2.addRow(self.chk_grao)
         lay.addWidget(g2)
 
         g3 = QGroupBox("3. Para várias fotos (lote)")
@@ -818,7 +821,8 @@ class WatermarkPanel(QWidget):
     def values(self) -> dict:
         """Parâmetros comuns do step 'remover_marca_regiao' (sem o retângulo)."""
         return {"metodo": self.metodo(), "expandir": self.sl_expandir.value(),
-                "raio": self.sl_raio.value()}
+                "raio": self.sl_raio.value(),
+                "grao": self.chk_grao.isChecked()}
 
     def refresh_model_status(self) -> None:
         lama = self.metodo() == "lama"

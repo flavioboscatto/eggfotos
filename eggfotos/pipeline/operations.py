@@ -281,6 +281,7 @@ register(Operation(
         Param("metodo", "Método", "choice", "telea", choices=tuple(inpaint.METHODS.items())),
         Param("expandir", "Expandir a máscara", "int", 30, 0, 100),
         Param("raio", "Raio do preenchimento", "int", 50, 1, 100),
+        Param("grao", "Recolocar o grão da foto", "bool", True),
     ),
     "Para marcas em posição fixa. LaMa exige o modelo baixado (aba Marca d'água).",
 ))
@@ -302,6 +303,7 @@ register(Operation(
         Param("metodo", "Método", "choice", "telea", choices=tuple(inpaint.METHODS.items())),
         Param("expandir", "Expandir a máscara", "int", 30, 0, 100),
         Param("raio", "Raio do preenchimento", "int", 50, 1, 100),
+        Param("grao", "Recolocar o grão da foto", "bool", True),
     ),
     "Máscara salva na aba Marca d'água, ancorada ao canto; serve em fotos de tamanhos diferentes.",
     _check_template(watermark.KIND_MASK),

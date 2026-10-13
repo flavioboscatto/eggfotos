@@ -69,7 +69,7 @@ def test_lama_path_uses_model_output(monkeypatch):
     """Com um LaMa falso (devolve cinza), só a máscara muda e o contexto é preservado."""
     base, marked, mask = _scene_with_mark()
     monkeypatch.setattr(inpaint, "_lama_run", lambda rgb, m: np.full_like(rgb, 100))
-    out = inpaint.remove_with_mask(marked, mask, "lama", expandir=0)
+    out = inpaint.remove_with_mask(marked, mask, "lama", expandir=0, grao=False)
     assert np.all(out[155, 240] == 100)
     assert np.array_equal(out[10, 10], marked[10, 10])
 
@@ -78,3 +78,72 @@ def test_region_op_registered(rgb):
     step = ops.get_operation("remover_marca_regiao").new_step()
     assert ops.apply_step(rgb, step).shape == rgb.shape
     assert "marca" in ops.describe_step(step).lower()
+
+
+# ----------------------------------------------------- janelas nativas e grão
+
+def _record_lama(monkeypatch):
+    calls = []
+
+    def fake(rgb, m):
+        calls.append(rgb.shape[:2])
+        return np.full_like(rgb, 90)
+    monkeypatch.setattr(inpaint, "_lama_run", fake)
+    return calls
+
+
+def test_lama_uses_native_512_windows_on_big_photo(monkeypatch):
+    calls = _record_lama(monkeypatch)
+    big = np.full((1600, 2400, 3), 150, np.uint8)
+    mask = np.zeros(big.shape[:2], np.uint8)
+    mask[1300:1360, 1800:2200] = 255            # marca pequena num canto da foto grande
+    out = inpaint.remove_with_mask(big, mask, "lama", expandir=0, grao=False)
+    assert calls and all(c == (512, 512) for c in calls)   # nunca reduz a foto
+    assert len(calls) <= 2
+    assert np.all(out[1330, 2000] == 90)
+    assert np.array_equal(out[100, 100], big[100, 100])
+
+
+def test_lama_tiles_a_large_mark_and_terminates(monkeypatch):
+    calls = _record_lama(monkeypatch)
+    big = np.full((1600, 2400, 3), 150, np.uint8)
+    mask = np.zeros(big.shape[:2], np.uint8)
+    mask[400:900, 300:1700] = 255                # marca enorme
+    out = inpaint.remove_with_mask(big, mask, "lama", expandir=0, grao=False)
+    assert len(calls) <= inpaint.MAX_WINDOWS + 1
+    assert np.all(out[600, 1000] == 90) and np.all(out[880, 320] == 90)   # tudo preenchido
+
+
+def test_small_photo_falls_back_to_downscaled(monkeypatch):
+    calls = _record_lama(monkeypatch)
+    img = np.full((300, 400, 3), 150, np.uint8)
+    mask = inpaint.rect_mask(img.shape, 0.4, 0.4, 0.2, 0.2)
+    inpaint.remove_with_mask(img, mask, "lama", grao=False)
+    assert len(calls) == 1
+
+
+def test_restore_grain_matches_surroundings():
+    rng = np.random.default_rng(0)
+    h, w = 300, 400
+    base = np.clip(120 + rng.normal(0, 6, (h, w, 3)), 0, 255).astype(np.uint8)   # foto com grão
+    mask = np.zeros((h, w), np.uint8)
+    mask[120:180, 150:260] = 255
+    smooth = base.copy()
+    smooth[mask > 0] = 120                                                       # preenchimento liso
+    out = inpaint.restore_grain(base, smooth, mask)
+    g = lambda im, reg: inpaint._noise_std(inpaint.cv2.cvtColor(im, inpaint.cv2.COLOR_RGB2GRAY), reg)
+    inside = mask > 0
+    ring = np.zeros_like(inside)
+    ring[100:200, 130:280] = True
+    ring &= ~inside
+    assert g(smooth, inside) < 0.5
+    assert abs(g(out, inside) - g(base, ring)) < 0.25 * g(base, ring)
+    assert np.array_equal(out[~inside & ~ring][:5], smooth[~inside & ~ring][:5])   # fora da máscara não muda
+
+
+def test_grain_is_deterministic():
+    base = np.random.default_rng(1).integers(100, 140, (200, 300, 3), dtype=np.uint8)
+    mask = inpaint.rect_mask(base.shape, 0.3, 0.3, 0.3, 0.2)
+    a = inpaint.remove_with_mask(base, mask, "telea")
+    b = inpaint.remove_with_mask(base, mask, "telea")
+    assert np.array_equal(a, b)
