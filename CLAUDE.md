@@ -25,7 +25,8 @@ eggfotos/
   core/                    processamento puro, SEM Qt
     image_io.py            load_image / save_image (Pillow, EXIF, ICC, gravação atômica)
     imgutils.py            split/merge alpha, sigma relativo, unsharp, vinheta
-    adjustments.py         adjust(img, exposicao=…, brilho=…, …)  valores −100..100
+    adjustments.py         adjust(img, exposicao=…, brilho=…, …)  valores −100..100 (exceto `ruido`: 0..100,
+                           ADJUSTMENT_RANGES); denoise = NLM na luminância + suavização do croma
     filters.py             registro FILTERS (28, incl. 10 vintage); apply_filter(img, nome, intensidade)
                            auxiliares vintage: _grain, _curves, _duotone, _dust
     background.py          remover fundo: compute_matte (rembg/ONNX) → apply_matte (refino,
@@ -44,6 +45,7 @@ eggfotos/
     main_window.py         janela, menus, prévias, commit no histórico
     canvas.py              QGraphicsView: zoom, recorte, pincel, região
     panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Rostos, ResizeDialog
+    color_picker.py        paleta de cores (amostras + RGB + "Mais cores…"), usada em todos os botões de cor
     batch_dialog.py        diálogo de lote + StepEditor gerado a partir dos Params
     workers.py             QThreads (miniaturas, prévia do lote, lote, TaskWorker genérico)
 tests/                     pytest do core e do pipeline
@@ -83,6 +85,7 @@ tests/                     pytest do core e do pipeline
 - Remoção de fundo: a descontaminação é própria (convolução normalizada), não usa pymatting
   (que o rembg instala, mas não é importado). Se a borda de cabelo/pelo ficar fraca, avaliar
   `pymatting.estimate_foreground_ml` (melhor, porém lento e com JIT na 1ª execução).
+- Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.
 - PNG/TIFF de 16 bits são convertidos para 8 bits na abertura.
@@ -101,5 +104,7 @@ tests/                     pytest do core e do pipeline
 | 9 | (Opcional) inpainting por difusão com GPU (torch, diffusers) | — |
 
 Modelos ONNX: baixados sob demanda (botão nas abas Fundo e Rostos) para `~/.eggfotos/modelos`
-(`%USERPROFILE%\.eggfotos\modelos` no Windows). Não versionar arquivos de modelo no projeto.
+(`%USERPROFILE%\.eggfotos\modelos` no Windows). O rembg 2.x grava em `modelos/models/<nome>/<nome>.onnx`
+(`model_path` aceita esse layout e o antigo). O download dos rostos usa os certificados do `certifi`
+(o Python do macOS não traz certificados raiz). Não versionar arquivos de modelo no projeto.
 Testes usam as fixtures `fake_matte` e `fake_faces` (conftest) — sem rede nem modelo. O teste do detector real só roda se o YuNet estiver baixado.

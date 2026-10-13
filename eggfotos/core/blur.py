@@ -45,8 +45,11 @@ def blur_with_mask(
     tipo: str = "gaussiano",
     intensidade: float = 50,
     cor: str = "#000000",
+    cor_original: bool = False,
 ) -> np.ndarray:
     """Aplica o efeito onde mask > 0 (mask uint8 HxW, 0–255).
+
+    `cor_original`: a tarja sólida usa a cor média da própria área (em vez de `cor`).
 
     Só processa o retângulo envolvente da máscara (com folga), o que deixa
     o pincel rápido mesmo em fotos grandes.
@@ -58,6 +61,9 @@ def blur_with_mask(
         return img.copy()
     H, W = img.shape[:2]
     ref = max(H, W)
+    if tipo == "solido" and cor_original:
+        mean = img[..., :3][mask > 0].reshape(-1, 3).mean(axis=0)
+        cor = "#{:02x}{:02x}{:02x}".format(*(int(round(c)) for c in mean))
     pad = int(0.1 * ref * float(np.clip(intensidade, 1, 100)) / 100.0) + 4
     x0, x1 = max(0, xs.min() - pad), min(W, xs.max() + pad + 1)
     y0, y1 = max(0, ys.min() - pad), min(H, ys.max() + pad + 1)
@@ -96,11 +102,12 @@ def blur_region(
     tipo: str = "gaussiano",
     intensidade: float = 50,
     cor: str = "#000000",
+    cor_original: bool = False,
 ) -> np.ndarray:
     """Borra uma região dada em coordenadas RELATIVAS (0–1), útil no lote."""
     H, W = img.shape[:2]
     mask = region_mask(img.shape, x * W, y * H, w * W, h * H, forma)
-    return blur_with_mask(img, mask, tipo, intensidade, cor)
+    return blur_with_mask(img, mask, tipo, intensidade, cor, cor_original)
 
 
 def stroke_mask(shape: tuple[int, ...], points: list[tuple[float, float]], size: float) -> np.ndarray:

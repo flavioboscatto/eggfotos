@@ -6,3 +6,4 @@ Pillow>=10.0
 # remoção de fundo (fase 4); os modelos .onnx são baixados sob demanda, fora do projeto
 rembg>=2.0
 onnxruntime>=1.17
+certifi>=2023.0

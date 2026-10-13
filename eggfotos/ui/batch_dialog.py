@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .color_picker import choose_color, style_color_button
 from ..pipeline.operations import REGISTRY, Operation, describe_step, get_operation, normalize_step
 from ..pipeline.recipe import (
     OUTPUT_FORMATS, OutputSettings, Recipe, list_saved_recipes, recipes_dir, safe_filename,
@@ -87,16 +88,15 @@ class StepEditor(QWidget):
             w.setCurrentIndex(idx)
             w.currentIndexChanged.connect(emit)
         elif p.kind == "color":
-            w = QPushButton(str(value).upper())
+            w = QPushButton()
             w.setProperty("color", str(value))
-            w.setStyleSheet(f"background: {value}; color: white;")
+            style_color_button(w, str(value))
 
             def pick(_=False, btn=w):
-                c = QColorDialog.getColor(QColor(btn.property("color")), self)
-                if c.isValid():
-                    btn.setProperty("color", c.name())
-                    btn.setText(c.name().upper())
-                    btn.setStyleSheet(f"background: {c.name()}; color: white;")
+                c = choose_color(self, btn.property("color"))
+                if c:
+                    btn.setProperty("color", c)
+                    style_color_button(btn, c)
                     emit()
             w.clicked.connect(pick)
         else:

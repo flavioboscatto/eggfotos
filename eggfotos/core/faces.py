@@ -6,6 +6,7 @@ Caixas são RELATIVAS (0–1) para servirem em qualquer resolução.
 """
 from __future__ import annotations
 
+import ssl
 import urllib.request
 from pathlib import Path
 
@@ -38,7 +39,12 @@ def download_model() -> Path:
     """Baixa o YuNet. Pode demorar: chame numa thread."""
     dest = model_path()
     tmp = dest.with_suffix(".part")
-    with urllib.request.urlopen(MODEL_URL, timeout=60) as r, open(tmp, "wb") as f:
+    try:  # o Python do macOS não traz certificados raiz; usa os do certifi
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ctx = ssl.create_default_context()
+    with urllib.request.urlopen(MODEL_URL, timeout=60, context=ctx) as r, open(tmp, "wb") as f:
         f.write(r.read())
     if tmp.stat().st_size < 10_000:
         tmp.unlink(missing_ok=True)
@@ -100,6 +106,7 @@ def blur_boxes(
     tipo: str = "mosaico",
     intensidade: float = 70,
     cor: str = "#000000",
+    cor_original: bool = False,
 ) -> np.ndarray:
     """Desfoca os rostos já detectados cujo score passa no limiar da sensibilidade."""
     if tipo not in BLUR_TYPES:
@@ -108,7 +115,7 @@ def blur_boxes(
     chosen = [b for b in boxes if b[4] >= thr]
     if not chosen:
         return img.copy()
-    return blur_with_mask(img, faces_mask(img.shape, chosen, margem), tipo, intensidade, cor)
+    return blur_with_mask(img, faces_mask(img.shape, chosen, margem), tipo, intensidade, cor, cor_original)
 
 
 def blur_faces(
@@ -118,6 +125,7 @@ def blur_faces(
     tipo: str = "mosaico",
     intensidade: float = 70,
     cor: str = "#000000",
+    cor_original: bool = False,
 ) -> np.ndarray:
     """Detecta e desfoca rostos de ponta a ponta (usado pelo lote)."""
-    return blur_boxes(img, detect_faces(img), sensibilidade, margem, tipo, intensidade, cor)
+    return blur_boxes(img, detect_faces(img), sensibilidade, margem, tipo, intensidade, cor, cor_original)

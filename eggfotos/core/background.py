@@ -46,7 +46,14 @@ def models_dir() -> Path:
 
 
 def model_path(modelo: str) -> Path:
-    return models_dir() / f"{MODELS[modelo][0]}.onnx"
+    """Onde está o modelo. O rembg 2.x guarda em <pasta>/models/<nome>/<nome>.onnx;
+    versões antigas, em <pasta>/<nome>.onnx. Aceita os dois."""
+    nome = MODELS[modelo][0]
+    candidatos = [
+        models_dir() / "models" / nome / f"{nome}.onnx",
+        models_dir() / f"{nome}.onnx",
+    ]
+    return next((c for c in candidatos if c.is_file()), candidatos[0])
 
 
 def model_available(modelo: str) -> bool:

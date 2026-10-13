@@ -414,7 +414,7 @@ class MainWindow(QMainWindow):
         if self.image is None:
             return
         bp = self.blur_panel
-        out = self._busy(lambda: blur_with_mask(self.image, mask, bp.tipo(), bp.intensidade(), bp.cor()))
+        out = self._busy(lambda: blur_with_mask(self.image, mask, bp.tipo(), bp.intensidade(), bp.cor(), bp.cor_original()))
         if out is not None:
             self.commit(out, "Borrar (pincel)", None)
 
@@ -426,7 +426,8 @@ class MainWindow(QMainWindow):
         bp = self.blur_panel
         step = {"op": "borrar_regiao", "x": x / W, "y": y / H, "w": w / W, "h": h / H,
                 "forma": self.canvas.region_shape, "tipo": bp.tipo(),
-                "intensidade": bp.intensidade(), "cor": bp.cor()}
+                "intensidade": bp.intensidade(), "cor": bp.cor(),
+                "cor_original": bp.cor_original()}
         self._apply_op(step, "Borrar região")
 
     # ============================================================== fundo

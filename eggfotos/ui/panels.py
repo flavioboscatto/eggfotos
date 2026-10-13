@@ -10,12 +10,13 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QPushButton, QRadioButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from ..core.adjustments import ADJUSTMENT_KEYS, ADJUSTMENT_LABELS, neutral_params
+from ..core.adjustments import ADJUSTMENT_KEYS, ADJUSTMENT_LABELS, adjustment_range, neutral_params
 from ..core.background import DEFAULT_MODEL, MODELS, model_available
 from ..core import faces as faces_core
 from ..core.blur import BLUR_TYPES
 from ..core.filters import filter_keys, filter_label
 from ..core.geometry import RATIO_CHOICES, downscale
+from .color_picker import choose_color, style_color_button
 from .qt_utils import debounce, to_qpixmap
 from .workers import ThumbnailWorker
 
@@ -49,11 +50,12 @@ class AdjustPanel(QWidget):
         self._sliders: dict[str, QSlider] = {}
         self._values: dict[str, QLabel] = {}
         for row, key in enumerate(ADJUSTMENT_KEYS):
-            s = _slider(-100, 100, 0)
+            s = _slider(*adjustment_range(key), 0)
             v = QLabel("0")
             v.setObjectName("value")
             v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            s.valueChanged.connect(lambda val, lb=v: lb.setText(f"{val:+d}" if val else "0"))
+            s.valueChanged.connect(lambda val, lb=v, k=key: lb.setText(
+                f"{val:+d}" if val and adjustment_range(k)[0] < 0 else str(val)))
             s.valueChanged.connect(lambda _=0: self._timer.start())
             grid.addWidget(QLabel(ADJUSTMENT_LABELS[key]), row, 0)
             grid.addWidget(s, row, 1)
@@ -61,7 +63,8 @@ class AdjustPanel(QWidget):
             self._sliders[key] = s
             self._values[key] = v
         lay.addLayout(grid)
-        lay.addWidget(_hint("A prévia é instantânea. Clique em Aplicar para gravar no histórico."))
+        lay.addWidget(_hint("A prévia é instantânea. Clique em Aplicar para gravar no histórico. "
+            "Remover granulação: a prévia é aproximada, confira em 100% (Ctrl+1)."))
 
         btns = QHBoxLayout()
         self.btn_reset = QPushButton("Zerar")
@@ -369,6 +372,9 @@ class BlurPanel(QWidget):
         self._color = "#000000"
         self._paint_color_button()
         form.addRow("Cor da tarja", self.btn_color)
+        self.chk_original = QCheckBox("Usar a cor original da área (média)")
+        self.chk_original.setToolTip("A tarja é preenchida com a cor média da própria região borrada")
+        form.addRow(self.chk_original)
         lay.addWidget(g2)
 
         lay.addWidget(_hint(
@@ -383,6 +389,7 @@ class BlurPanel(QWidget):
 
         self.grp_tool.idToggled.connect(lambda _id, on: on and self._changed())
         self.cmb_tipo.currentIndexChanged.connect(lambda _: self._changed())
+        self.chk_original.toggled.connect(lambda _: self._changed())
         self.sp_brush.valueChanged.connect(lambda _: self.settingsChanged.emit())
         self.btn_color.clicked.connect(self._pick_color)
         self._changed()
@@ -402,21 +409,27 @@ class BlurPanel(QWidget):
     def cor(self) -> str:
         return self._color
 
+    def cor_original(self) -> bool:
+        return self.chk_original.isChecked() and self.tipo() == "solido"
+
     def _changed(self) -> None:
+        solid = self.tipo() == "solido"
         self.sp_brush.setEnabled(self.tool() == "pincel")
-        self.btn_color.setEnabled(self.tipo() == "solido")
-        self.sl_int.setEnabled(self.tipo() != "solido")
+        self.btn_color.setEnabled(solid and not self.chk_original.isChecked())
+        self.chk_original.setEnabled(solid)
+        self.sl_int.setEnabled(not solid)
         self.settingsChanged.emit()
 
     def _paint_color_button(self) -> None:
-        self.btn_color.setText(self._color.upper())
-        self.btn_color.setStyleSheet(f"background: {self._color}; color: white;")
+        style_color_button(self.btn_color, self._color)
 
     def _pick_color(self) -> None:
-        c = QColorDialog.getColor(QColor(self._color), self, "Cor da tarja")
-        if c.isValid():
-            self._color = c.name()
+        c = choose_color(self, self._color, "Cor da tarja")
+        if c:
+            self._color = c
             self._paint_color_button()
+            self.cmb_tipo.setCurrentIndex(self.cmb_tipo.findData("solido"))  # escolher cor = tarja
+            self.chk_original.setChecked(False)
 
 
 # ==================================================================== Fundo
@@ -542,13 +555,12 @@ class BackgroundPanel(QWidget):
         self.cancelRequested.emit()
 
     def _paint_color_button(self) -> None:
-        self.btn_color.setText(self._color.upper())
-        self.btn_color.setStyleSheet(f"background: {self._color}; color: gray;")
+        style_color_button(self.btn_color, self._color)
 
     def _pick_color(self) -> None:
-        c = QColorDialog.getColor(QColor(self._color), self, "Cor do fundo")
-        if c.isValid():
-            self._color = c.name()
+        c = choose_color(self, self._color, "Cor do fundo")
+        if c:
+            self._color = c
             self._paint_color_button()
             self.rb_cor.setChecked(True)
             self._timer.start()
@@ -597,6 +609,8 @@ class FacesPanel(QWidget):
         f2.addRow("Sensibilidade", self.sl_sens)
         f2.addRow("Margem extra", self.sl_margem)
         f2.addRow("Cor da tarja", self.btn_color)
+        self.chk_original = QCheckBox("Usar a cor original da área (média)")
+        f2.addRow(self.chk_original)
         lay.addWidget(self.g2)
         lay.addWidget(_hint(
             "Aumente a sensibilidade se algum rosto escapar; reduza se aparecerem falsos positivos. "
@@ -618,6 +632,7 @@ class FacesPanel(QWidget):
         for sl in (self.sl_int, self.sl_sens, self.sl_margem):
             sl.valueChanged.connect(lambda _=0: self._timer.start())
         self.cmb_tipo.currentIndexChanged.connect(lambda _: (self._sync(), self._timer.start()))
+        self.chk_original.toggled.connect(lambda _: (self._sync(), self._timer.start()))
         self.btn_color.clicked.connect(self._pick_color)
         self.btn_download.clicked.connect(self.downloadRequested)
         self.btn_detect.clicked.connect(self.detectRequested)
@@ -635,11 +650,13 @@ class FacesPanel(QWidget):
             "tipo": self.cmb_tipo.currentData(),
             "intensidade": self.sl_int.value(),
             "cor": self._color,
+            "cor_original": self.chk_original.isChecked() and self.cmb_tipo.currentData() == "solido",
         }
 
     def _sync(self) -> None:
         solid = self.cmb_tipo.currentData() == "solido"
-        self.btn_color.setEnabled(solid)
+        self.btn_color.setEnabled(solid and not self.chk_original.isChecked())
+        self.chk_original.setEnabled(solid)
         self.sl_int.setEnabled(not solid)
 
     def refresh_model_status(self) -> None:
@@ -663,14 +680,15 @@ class FacesPanel(QWidget):
         self.cancelRequested.emit()
 
     def _paint_color_button(self) -> None:
-        self.btn_color.setText(self._color.upper())
-        self.btn_color.setStyleSheet(f"background: {self._color}; color: gray;")
+        style_color_button(self.btn_color, self._color)
 
     def _pick_color(self) -> None:
-        c = QColorDialog.getColor(QColor(self._color), self, "Cor da tarja")
-        if c.isValid():
-            self._color = c.name()
+        c = choose_color(self, self._color, "Cor da tarja")
+        if c:
+            self._color = c
             self._paint_color_button()
+            self.cmb_tipo.setCurrentIndex(self.cmb_tipo.findData("solido"))
+            self.chk_original.setChecked(False)
             self._timer.start()
 
 

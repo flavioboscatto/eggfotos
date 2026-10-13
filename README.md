@@ -35,11 +35,11 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Área | Recursos |
 |---|---|
 | Arquivo | Abrir (JPG, PNG, WEBP, BMP, TIFF), arrastar e soltar, Salvar / Salvar como, qualidade JPG/WEBP, mantém EXIF e perfil de cor, corrige a orientação da câmera |
-| Ajustes | Exposição, brilho, contraste, realces, sombras, saturação, temperatura, nitidez, com prévia ao vivo |
+| Ajustes | Exposição, brilho, contraste, realces, sombras, saturação, temperatura, nitidez, **remover granulação**, com prévia ao vivo |
 | Filtros | 28 filtros (inclui 10 vintage/foto antiga: Foto antiga, Sépia envelhecido, Daguerreótipo, Polaroid, Anos 70, Kodachrome, Cross process, Filme P&B clássico, Filme 8mm, Papel amarelado) com **miniatura da própria foto**, intensidade 0–100% e prévia |
 | Recortar | Livre ou proporção fixa (1:1, 4:3, 3:2, 16:9…), mover a seleção, Enter aplica |
 | Girar | 90° esquerda/direita, espelhar, endireitar (−45° a +45° com recorte automático), redimensionar |
-| Borrar | Pincel, retângulo ou elipse; gaussiano, mosaico ou tarja sólida |
+| Borrar | Pincel, retângulo ou elipse; gaussiano, mosaico ou tarja sólida (paleta de cores com RGB, ou cor original da área) |
 | Fundo | Remover fundo com IA (3 modelos), afinar/suavizar borda, descontaminar cor, fundo transparente, cor sólida ou **desfocado** (efeito retrato); modelo baixado uma vez, sob demanda; entra no lote |
 | Rostos | Detecta rostos sozinho (YuNet) e aplica mosaico, desfoque ou tarja; sensibilidade e margem ajustáveis; entra no lote |
 | Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (segure para comparar) |

@@ -63,6 +63,9 @@ def test_adjust_neutral_is_identity(rgb):
 @pytest.mark.parametrize("key", adjustments.ADJUSTMENT_KEYS)
 @pytest.mark.parametrize("val", [-100, 50, 100])
 def test_adjust_each(rgb, key, val):
+    lo, hi = adjustments.adjustment_range(key)
+    if not lo <= val <= hi:
+        pytest.skip("fora da faixa deste ajuste")
     out = adjustments.adjust(rgb, **{key: val})
     assert out.shape == rgb.shape and out.dtype == np.uint8
     assert not np.array_equal(out, rgb)
@@ -214,3 +217,25 @@ def test_history_trim_keeps_steps(rgb):
     assert h.original is rgb
     steps, manual = h.steps()
     assert len(steps) == 6 and manual == 0  # nenhum passo perdido da receita
+
+
+def test_denoise_reduces_grain_keeps_edges():
+    rng = np.random.default_rng(0)
+    clean = np.zeros((120, 160, 3), np.uint8)
+    clean[:, 80:] = 200
+    noisy = np.clip(clean + rng.normal(0, 18, clean.shape), 0, 255).astype(np.uint8)
+    out = adjustments.adjust(noisy, ruido=80)
+    assert out[:, :60].astype(float).std() < noisy[:, :60].astype(float).std() * 0.5
+    assert out[:, 100:].mean() - out[:, :60].mean() > 150  # a borda continua nítida
+
+
+def test_denoise_negative_is_ignored(rgb):
+    assert np.array_equal(adjustments.adjust(rgb, ruido=-50), rgb)
+
+
+def test_solid_blur_with_original_color(rgb):
+    out = blur.blur_region(rgb, 0.3, 0.3, 0.2, 0.2, tipo="solido", cor="#00ff00", cor_original=True)
+    h, w = rgb.shape[:2]
+    y, x = int(0.4 * h), int(0.4 * w)
+    area = rgb[int(0.3 * h):int(0.5 * h), int(0.3 * w):int(0.5 * w)].reshape(-1, 3).mean(axis=0)
+    assert np.abs(out[y, x].astype(float) - area).max() <= 1

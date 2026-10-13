@@ -152,7 +152,7 @@ _REL = dict(kind="float", minimum=0.0, maximum=1.0)
 
 register(Operation(
     "ajustes", "Ajustes de luz e cor", adjustments.adjust,
-    tuple(Param(k, adjustments.ADJUSTMENT_LABELS[k], "int", 0, -100, 100)
+    tuple(Param(k, adjustments.ADJUSTMENT_LABELS[k], "int", 0, *adjustments.adjustment_range(k))
           for k in adjustments.ADJUSTMENT_KEYS),
 ))
 
@@ -222,6 +222,7 @@ register(Operation(
         Param("tipo", "Tipo", "choice", "gaussiano", choices=tuple(blur.BLUR_TYPES.items())),
         Param("intensidade", "Intensidade", "int", 50, 1, 100),
         Param("cor", "Cor da tarja", "color", "#000000"),
+        Param("cor_original", "Tarja na cor original da área", "bool", False),
     ),
 ))
 
@@ -260,6 +261,7 @@ register(Operation(
         Param("tipo", "Tipo", "choice", "mosaico", choices=tuple(blur.BLUR_TYPES.items())),
         Param("intensidade", "Intensidade", "int", 70, 1, 100),
         Param("cor", "Cor da tarja", "color", "#000000"),
+        Param("cor_original", "Tarja na cor original da área", "bool", False),
     ),
     "Exige o modelo de rostos baixado (aba Rostos).",
 ))
