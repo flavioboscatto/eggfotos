@@ -32,6 +32,8 @@ eggfotos/
     background.py          remover fundo: compute_matte (rembg/ONNX) → apply_matte (refino,
                            descontaminação, fundo transparente/cor); remove_background = as duas
                            blur_background / blur_background_auto: desfoca o que não é o objeto
+    inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
+                           remove_region (retângulo relativo, vai pro lote); só processa a região da máscara
     faces.py               YuNet (cv2.FaceDetectorYN): detect_faces (caixas relativas + score) →
                            blur_boxes (sensibilidade, margem, tipo); blur_faces = as duas
     geometry.py            crop, crop_relative, crop_to_ratio, rotate, straighten, resize, downscale
@@ -44,7 +46,7 @@ eggfotos/
   ui/                      PyQt6 — só monta parâmetros e chama core/pipeline
     main_window.py         janela, menus, prévias, commit no histórico
     canvas.py              QGraphicsView: zoom, recorte, pincel, região
-    panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Rostos, ResizeDialog
+    panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Ocultar rosto, Marca d'água, ResizeDialog
     color_picker.py        paleta de cores (amostras + RGB + "Mais cores…"), usada em todos os botões de cor
     batch_dialog.py        diálogo de lote + StepEditor gerado a partir dos Params
     workers.py             QThreads (miniaturas, prévia do lote, lote, TaskWorker genérico)
@@ -86,6 +88,7 @@ tests/                     pytest do core e do pipeline
   (que o rembg instala, mas não é importado). Se a borda de cabelo/pelo ficar fraca, avaliar
   `pymatting.estimate_foreground_ml` (melhor, porém lento e com JIT na 1ª execução).
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
+- Botão Original é um interruptor (clique liga/desliga); ao editar ou trocar de aba ele desliga sozinho.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.
 - PNG/TIFF de 16 bits são convertidos para 8 bits na abertura.
@@ -97,13 +100,13 @@ tests/                     pytest do core e do pipeline
 | 1–3 | Ajustes, filtros, recorte/giro, borrar, histórico, lote e receitas | feito |
 | — | Filtros vintage e de foto antiga (10) | feito |
 | 4 | Remoção de fundo (rembg: u2netp / isnet-general-use / BiRefNet-lite), refino de borda, descontaminação de cor, fundo transparente ou cor sólida, aba **Fundo**, operação `remover_fundo` no lote | feito, falta testar com foto real |
-| 5 | Desfoque de fundo (opção na aba Fundo, reusa `compute_matte`) e desfoque automático de rostos (aba **Rostos**, YuNet ~230 KB, ops `desfocar_fundo` e `desfocar_rostos`) | feito, falta testar com foto real |
-| 6 | Marca d'água: máscara por pincel + `cv2.inpaint` (Telea), depois LaMa via ONNX | — |
+| 5 | Desfoque de fundo (opção na aba Fundo, reusa `compute_matte`) e desfoque automático de rostos (aba **Ocultar rosto**, YuNet ~230 KB, ops `desfocar_fundo` e `desfocar_rostos`) | feito, falta testar com foto real |
+| 6 | Marca d'água: aba **Marca d'água** (pincel/retângulo acumulam uma máscara), Telea/Navier-Stokes sem modelo e LaMa (ONNX ~200 MB, baixado sob demanda); op `remover_marca_regiao` (1 retângulo) no lote | feito; **LaMa ainda não testado com o modelo real** (formato de saída detectado em execução) |
 | 7 | MobileSAM: seleção com um clique para máscara e fundo | — |
 | 8 | Marca d'água em lote: máscara ancorada + estimativa multi-imagem / inversão de alpha | — |
 | 9 | (Opcional) inpainting por difusão com GPU (torch, diffusers) | — |
 
-Modelos ONNX: baixados sob demanda (botão nas abas Fundo e Rostos) para `~/.eggfotos/modelos`
+Modelos ONNX: baixados sob demanda (botão nas abas Fundo, Ocultar rosto e Marca d'água) para `~/.eggfotos/modelos`
 (`%USERPROFILE%\.eggfotos\modelos` no Windows). O rembg 2.x grava em `modelos/models/<nome>/<nome>.onnx`
 (`model_path` aceita esse layout e o antigo). O download dos rostos usa os certificados do `certifi`
 (o Python do macOS não traz certificados raiz). Não versionar arquivos de modelo no projeto.

@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core import adjustments, background, blur, faces, filters, geometry
+from ..core import adjustments, background, blur, faces, filters, geometry, inpaint
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,8 @@ def describe_step(step: dict) -> str:
         return f"{op.label} — {background.MODELS[s['modelo']][0]}, intensidade {s['intensidade']}"
     if k == "desfocar_rostos":
         return f"{op.label} — {blur.BLUR_TYPES[s['tipo']]}, sensibilidade {s['sensibilidade']}"
+    if k == "remover_marca_regiao":
+        return f"{op.label} — {inpaint.METHODS[s['metodo']].split(' (')[0]}, {s['w'] * 100:.0f}% × {s['h'] * 100:.0f}%"
     if k == "recortar_relativo":
         return f"{op.label} — {s['w'] * 100:.0f}% × {s['h'] * 100:.0f}%"
     return op.label
@@ -222,7 +224,6 @@ register(Operation(
         Param("tipo", "Tipo", "choice", "gaussiano", choices=tuple(blur.BLUR_TYPES.items())),
         Param("intensidade", "Intensidade", "int", 50, 1, 100),
         Param("cor", "Cor da tarja", "color", "#000000"),
-        Param("cor_original", "Tarja na cor original da área", "bool", False),
     ),
 ))
 
@@ -254,14 +255,27 @@ register(Operation(
 ))
 
 register(Operation(
-    "desfocar_rostos", "Desfocar rostos", faces.blur_faces,
+    "desfocar_rostos", "Ocultar rostos", faces.blur_faces,
     (
         Param("sensibilidade", "Sensibilidade", "int", 60, 0, 100),
         Param("margem", "Margem extra (%)", "int", 30, 0, 200),
         Param("tipo", "Tipo", "choice", "mosaico", choices=tuple(blur.BLUR_TYPES.items())),
         Param("intensidade", "Intensidade", "int", 70, 1, 100),
         Param("cor", "Cor da tarja", "color", "#000000"),
-        Param("cor_original", "Tarja na cor original da área", "bool", False),
     ),
-    "Exige o modelo de rostos baixado (aba Rostos).",
+    "Exige o modelo de rostos baixado (aba Ocultar rosto).",
+))
+
+register(Operation(
+    "remover_marca_regiao", "Remover marca d'água (área)", inpaint.remove_region,
+    (
+        Param("x", "X (0–1)", default=0.7, **_REL),
+        Param("y", "Y (0–1)", default=0.9, **_REL),
+        Param("w", "Largura (0–1)", default=0.28, **_REL),
+        Param("h", "Altura (0–1)", default=0.08, **_REL),
+        Param("metodo", "Método", "choice", "telea", choices=tuple(inpaint.METHODS.items())),
+        Param("expandir", "Expandir a máscara", "int", 30, 0, 100),
+        Param("raio", "Raio do preenchimento", "int", 50, 1, 100),
+    ),
+    "Para marcas em posição fixa. LaMa exige o modelo baixado (aba Marca d'água).",
 ))

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__
-from ..core import background, faces, geometry
+from ..core import background, faces, geometry, inpaint
 from ..core.blur import blur_with_mask
 from ..core.history import History
 from ..core.image_io import OPEN_FILTER, is_supported, load_image, save_image
@@ -23,10 +23,10 @@ from ..pipeline.recipe import Recipe, recipes_dir, safe_filename
 from .batch_dialog import BatchDialog
 from .canvas import TOOL_BRUSH, TOOL_CROP, TOOL_NAV, TOOL_REGION, ImageCanvas
 from .workers import TaskWorker
-from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, ResizeDialog
+from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, ResizeDialog, WatermarkPanel
 
 PROXY_MAX = 1800  # lado maior da cópia reduzida usada nas prévias ao vivo
-TAB_ADJUST, TAB_FILTERS, TAB_CROP, TAB_BLUR, TAB_BACKGROUND, TAB_FACES = range(6)
+TAB_ADJUST, TAB_FILTERS, TAB_CROP, TAB_BLUR, TAB_BACKGROUND, TAB_FACES, TAB_WATERMARK = range(7)
 SAVE_FILTER = "JPG (*.jpg);;PNG (*.png);;WEBP (*.webp);;TIFF (*.tif)"
 
 
@@ -49,6 +49,10 @@ class MainWindow(QMainWindow):
         self._proxy_matte: np.ndarray | None = None
         self._face_boxes: list | None = None  # rostos detectados (relativos) da foto atual
         self._face_uid: int | None = None
+        self._wm_mask: np.ndarray | None = None   # marcação da aba Marca d'água (resolução total)
+        self._wm_rects: list[tuple[float, float, float, float]] = []  # retângulos relativos
+        self._wm_strokes = 0
+        self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
         self._task: TaskWorker | None = None
         self._task_dialog: QProgressDialog | None = None
 
@@ -74,13 +78,15 @@ class MainWindow(QMainWindow):
         self.blur_panel = BlurPanel()
         self.background_panel = BackgroundPanel()
         self.faces_panel = FacesPanel()
+        self.wm_panel = WatermarkPanel()
         self.tabs = QTabWidget()
         self.tabs.addTab(self.adjust_panel, "Ajustes")
         self.tabs.addTab(self.filters_panel, "Filtros")
         self.tabs.addTab(self.crop_panel, "Recortar")
         self.tabs.addTab(self.blur_panel, "Borrar")
         self.tabs.addTab(self.background_panel, "Fundo")
-        self.tabs.addTab(self.faces_panel, "Rostos")
+        self.tabs.addTab(self.faces_panel, "Ocultar rosto")
+        self.tabs.addTab(self.wm_panel, "Marca d'água")
         dock = QDockWidget("Ferramentas", self)
         dock.setObjectName("dock_tools")
         dock.setWidget(self.tabs)
@@ -149,7 +155,8 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         self.btn_compare = QToolButton()
         self.btn_compare.setText("◐ Original")
-        self.btn_compare.setToolTip("Segure para ver a foto original")
+        self.btn_compare.setCheckable(True)
+        self.btn_compare.setToolTip("Clique para ver a foto original; clique de novo para voltar à edição")
         tb.addWidget(self.btn_compare)
         tb.addSeparator()
         tb.addAction(self.act_batch)
@@ -200,8 +207,13 @@ class MainWindow(QMainWindow):
         fp.applyRequested.connect(self._apply_faces)
         fp.cancelRequested.connect(self._cancel_preview)
 
-        self.btn_compare.pressed.connect(self._show_original)
-        self.btn_compare.released.connect(self._hide_original)
+        wp = self.wm_panel
+        wp.settingsChanged.connect(self._sync_wm_tool)
+        wp.clearRequested.connect(self._wm_clear)
+        wp.applyRequested.connect(self._apply_watermark)
+        wp.downloadRequested.connect(self._download_lama)
+
+        self.btn_compare.toggled.connect(lambda on: self._show_original() if on else self._hide_original())
 
     # ============================================================= estado
     def _is_modified(self) -> bool:
@@ -232,6 +244,7 @@ class MainWindow(QMainWindow):
         self.image = img
         self.proxy, self.proxy_scale = geometry.downscale(img, PROXY_MAX)
         self._pending = None
+        self._uncheck_original()
         self.canvas.set_image(img, reset_view)
         self.adjust_panel.reset()
         self.filters_panel.reset()
@@ -239,6 +252,7 @@ class MainWindow(QMainWindow):
         self._drop_matte()
         self._face_boxes = self._face_uid = None
         self.faces_panel.reset()
+        self._wm_reset()
         if self.tabs.currentIndex() == TAB_FILTERS:
             self.filters_panel.set_source(img)
         else:
@@ -276,6 +290,7 @@ class MainWindow(QMainWindow):
     def _run_preview(self, render: Callable[[], None]) -> None:
         if self.image is None:
             return
+        self._uncheck_original()
         self._pending = render
         try:
             render()
@@ -293,9 +308,17 @@ class MainWindow(QMainWindow):
             self.canvas.set_preview(out, 1.0 / self.proxy_scale, centered)
         self._run_preview(render)
 
+    def _uncheck_original(self) -> None:
+        """Sai do modo "ver original" sem redesenhar (quem chama já cuida da tela)."""
+        if self.btn_compare.isChecked():
+            self.btn_compare.blockSignals(True)
+            self.btn_compare.setChecked(False)
+            self.btn_compare.blockSignals(False)
+
     def _show_original(self) -> None:
         if self.history.original is not None:
             self.canvas.set_image(self.history.original)
+            self.statusBar().showMessage("Mostrando a foto original — clique em Original para voltar.")
 
     def _hide_original(self) -> None:
         if self.image is None:
@@ -306,6 +329,9 @@ class MainWindow(QMainWindow):
 
     # ============================================================== abas
     def _on_tab_changed(self, idx: int) -> None:
+        if self.btn_compare.isChecked() and self.image is not None:  # sai do "ver original"
+            self._uncheck_original()
+            self.canvas.set_image(self.image)
         self._cancel_preview()
         self.adjust_panel.reset()
         self.filters_panel.reset()
@@ -314,6 +340,8 @@ class MainWindow(QMainWindow):
             self.background_panel.refresh_model_status()
         if idx == TAB_FACES:
             self.faces_panel.refresh_model_status()
+        if idx == TAB_WATERMARK:
+            self.wm_panel.refresh_model_status()
         if idx == TAB_FILTERS and self._thumbs_stale and self.image is not None:
             self.filters_panel.set_source(self.image)
             self._thumbs_stale = False
@@ -322,6 +350,8 @@ class MainWindow(QMainWindow):
             self._on_ratio(self.crop_panel.ratio_key())
         elif idx == TAB_BLUR:
             self._sync_blur_tool()
+        elif idx == TAB_WATERMARK:
+            self._sync_wm_tool()
         else:
             self.canvas.set_tool(TOOL_NAV)
 
@@ -413,21 +443,29 @@ class MainWindow(QMainWindow):
     def _apply_brush_blur(self, mask: np.ndarray) -> None:
         if self.image is None:
             return
+        if self.tabs.currentIndex() == TAB_WATERMARK:
+            self._wm_add_mask(mask, brush=True)
+            return
         bp = self.blur_panel
-        out = self._busy(lambda: blur_with_mask(self.image, mask, bp.tipo(), bp.intensidade(), bp.cor(), bp.cor_original()))
+        out = self._busy(lambda: blur_with_mask(self.image, mask, bp.tipo(), bp.intensidade(), bp.cor()))
         if out is not None:
             self.commit(out, "Borrar (pincel)", None)
 
     def _apply_region_blur(self, rect) -> None:
         if self.image is None:
             return
+        if self.tabs.currentIndex() == TAB_WATERMARK:
+            H, W = self.image.shape[:2]
+            x, y, w, h = rect
+            self._wm_rects.append((x / W, y / H, w / W, h / H))
+            self._wm_add_mask(inpaint.rect_mask(self.image.shape, x / W, y / H, w / W, h / H), brush=False)
+            return
         H, W = self.image.shape[:2]
         x, y, w, h = rect
         bp = self.blur_panel
         step = {"op": "borrar_regiao", "x": x / W, "y": y / H, "w": w / W, "h": h / H,
                 "forma": self.canvas.region_shape, "tipo": bp.tipo(),
-                "intensidade": bp.intensidade(), "cor": bp.cor(),
-                "cor_original": bp.cor_original()}
+                "intensidade": bp.intensidade(), "cor": bp.cor()}
         self._apply_op(step, "Borrar região")
 
     # ============================================================== fundo
@@ -589,7 +627,88 @@ class MainWindow(QMainWindow):
         step = get_operation("desfocar_rostos").new_step(**values)
         img, boxes = self.image, self._face_boxes
         self._run_task("Aplicando…", lambda: faces.blur_boxes(img, boxes, **values),
-                       lambda out: self.commit(out, "Desfocar rostos", step))
+                       lambda out: self.commit(out, "Ocultar rostos", step))
+
+    # ======================================================== marca d'água
+    def _wm_reset(self) -> None:
+        self._wm_mask = None
+        self._wm_rects = []
+        self._wm_brush = False
+        self._wm_strokes = 0
+        self.wm_panel.set_marked(0)
+
+    def _wm_count(self) -> int:
+        return len(self._wm_rects) + self._wm_strokes
+
+    def _sync_wm_tool(self) -> None:
+        if self.tabs.currentIndex() != TAB_WATERMARK:
+            return
+        if self.wm_panel.tool() == "pincel":
+            self.canvas.set_tool(TOOL_BRUSH)
+            self.canvas.set_brush_size(self.wm_panel.brush_size())
+        else:
+            self.canvas.region_shape = "retangulo"
+            self.canvas.set_tool(TOOL_REGION)
+
+    def _wm_add_mask(self, mask: np.ndarray, brush: bool) -> None:
+        self._wm_mask = mask.copy() if self._wm_mask is None else np.maximum(self._wm_mask, mask)
+        if brush:
+            self._wm_brush = True
+            self._wm_strokes += 1
+        self.wm_panel.set_marked(self._wm_count())
+        self._wm_show()
+
+    def _wm_show(self) -> None:
+        """Mostra a marcação em vermelho translúcido sobre a foto."""
+        if self._wm_mask is None or self.image is None:
+            return
+        mask = self._wm_mask
+
+        def render():
+            ph, pw = self.proxy.shape[:2]
+            m = cv2.resize(mask, (pw, ph), interpolation=cv2.INTER_NEAREST) > 0
+            out = self.proxy.copy()
+            red = np.array([255, 40, 40], np.float32)
+            out[m] = (out[m][..., :3] * 0.4 + red * 0.6).astype(np.uint8) if out.shape[2] == 3 else out[m]
+            self.canvas.set_preview(out, 1.0 / self.proxy_scale)
+        self._run_preview(render)
+
+    def _wm_clear(self) -> None:
+        self._wm_reset()
+        self._cancel_preview()
+
+    def _download_lama(self) -> None:
+        r = QMessageBox.question(
+            self, APP_NAME,
+            f"Baixar o modelo LaMa ({inpaint.LAMA_FILE}, ~200 MB)?\n\n"
+            "Origem: huggingface.co/Carve/LaMa-ONNX\n"
+            f"Destino: {background.models_dir()}\n\nÉ feito uma única vez e pode levar alguns minutos.",
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+
+        def done(_):
+            self.wm_panel.refresh_model_status()
+            self.statusBar().showMessage("✓ Modelo LaMa baixado", 3000)
+
+        self._run_task("Baixando o modelo LaMa… pode levar alguns minutos.", inpaint.download_lama, done)
+
+    def _apply_watermark(self, values: dict) -> None:
+        if self.image is None or self._wm_mask is None:
+            return
+        if values["metodo"] == "lama" and not inpaint.lama_available():
+            QMessageBox.information(self, APP_NAME, "Baixe o modelo LaMa primeiro (botão na aba).")
+            return
+        img, mask = self.image, self._wm_mask
+        # um único retângulo, sem pincel, vira receita reproduzível; o resto é edição manual
+        step = None
+        if not self._wm_brush and len(self._wm_rects) == 1:
+            x, y, w, h = self._wm_rects[0]
+            step = get_operation("remover_marca_regiao").new_step(x=x, y=y, w=w, h=h, **values)
+        self._run_task("Removendo a marca d'água…",
+                       lambda: inpaint.remove_with_mask(img, mask, **values),
+                       lambda out: self.commit(out, "Remover marca d'água", step))
+
 
     # ========================================================= histórico
     def undo(self) -> None:

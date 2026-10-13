@@ -30,7 +30,7 @@ pytest -q
 
 Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`).
 
-## O que já funciona (fases 1 a 5)
+## O que já funciona (fases 1 a 6)
 
 | Área | Recursos |
 |---|---|
@@ -41,8 +41,9 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Girar | 90° esquerda/direita, espelhar, endireitar (−45° a +45° com recorte automático), redimensionar |
 | Borrar | Pincel, retângulo ou elipse; gaussiano, mosaico ou tarja sólida (paleta de cores com RGB, ou cor original da área) |
 | Fundo | Remover fundo com IA (3 modelos), afinar/suavizar borda, descontaminar cor, fundo transparente, cor sólida ou **desfocado** (efeito retrato); modelo baixado uma vez, sob demanda; entra no lote |
-| Rostos | Detecta rostos sozinho (YuNet) e aplica mosaico, desfoque ou tarja; sensibilidade e margem ajustáveis; entra no lote |
-| Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (segure para comparar) |
+| Ocultar rosto | Detecta rostos sozinho (YuNet) e aplica mosaico, embaçar ou tarja; sensibilidade e margem ajustáveis; entra no lote |
+| Marca d'água | Marque com pincel ou retângulo e remova com preenchimento rápido (Telea/Navier-Stokes) ou por IA (LaMa, modelo baixado sob demanda); um retângulo fixo entra no lote |
+| Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (clique para ver a foto original, clique de novo para voltar) |
 | Lote | Pasta de entrada (com subpastas), receita de passos, prévia em 3 fotos, formato de saída, sufixo, processos paralelos, pular já processadas, log CSV |
 | Receitas | "Editar → Salvar edições como receita" transforma o que você fez na foto aberta numa receita para o lote |
 

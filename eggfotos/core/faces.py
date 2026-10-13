@@ -62,7 +62,7 @@ def detect_faces(img: np.ndarray) -> list[Box]:
     """Rostos encontrados: lista de (x, y, w, h, score), coordenadas relativas."""
     if not model_available():
         raise ModelNotDownloadedError(
-            "O modelo de rostos ainda não foi baixado. Baixe-o na aba Rostos do programa."
+            "O modelo de rostos ainda não foi baixado. Baixe-o na aba Ocultar rosto do programa."
         )
     rgb, _ = split_alpha(img)
     H, W = rgb.shape[:2]
@@ -106,7 +106,6 @@ def blur_boxes(
     tipo: str = "mosaico",
     intensidade: float = 70,
     cor: str = "#000000",
-    cor_original: bool = False,
 ) -> np.ndarray:
     """Desfoca os rostos já detectados cujo score passa no limiar da sensibilidade."""
     if tipo not in BLUR_TYPES:
@@ -115,7 +114,7 @@ def blur_boxes(
     chosen = [b for b in boxes if b[4] >= thr]
     if not chosen:
         return img.copy()
-    return blur_with_mask(img, faces_mask(img.shape, chosen, margem), tipo, intensidade, cor, cor_original)
+    return blur_with_mask(img, faces_mask(img.shape, chosen, margem), tipo, intensidade, cor)
 
 
 def blur_faces(
@@ -125,7 +124,6 @@ def blur_faces(
     tipo: str = "mosaico",
     intensidade: float = 70,
     cor: str = "#000000",
-    cor_original: bool = False,
 ) -> np.ndarray:
     """Detecta e desfoca rostos de ponta a ponta (usado pelo lote)."""
-    return blur_boxes(img, detect_faces(img), sensibilidade, margem, tipo, intensidade, cor, cor_original)
+    return blur_boxes(img, detect_faces(img), sensibilidade, margem, tipo, intensidade, cor)

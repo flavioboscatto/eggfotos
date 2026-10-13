@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 from ..core.adjustments import ADJUSTMENT_KEYS, ADJUSTMENT_LABELS, adjustment_range, neutral_params
 from ..core.background import DEFAULT_MODEL, MODELS, model_available
 from ..core import faces as faces_core
+from ..core import inpaint as inpaint_core
+from ..core.inpaint import METHODS as INPAINT_METHODS
 from ..core.blur import BLUR_TYPES
 from ..core.filters import filter_keys, filter_label
 from ..core.geometry import RATIO_CHOICES, downscale
@@ -372,9 +374,6 @@ class BlurPanel(QWidget):
         self._color = "#000000"
         self._paint_color_button()
         form.addRow("Cor da tarja", self.btn_color)
-        self.chk_original = QCheckBox("Usar a cor original da área (média)")
-        self.chk_original.setToolTip("A tarja é preenchida com a cor média da própria região borrada")
-        form.addRow(self.chk_original)
         lay.addWidget(g2)
 
         lay.addWidget(_hint(
@@ -389,7 +388,6 @@ class BlurPanel(QWidget):
 
         self.grp_tool.idToggled.connect(lambda _id, on: on and self._changed())
         self.cmb_tipo.currentIndexChanged.connect(lambda _: self._changed())
-        self.chk_original.toggled.connect(lambda _: self._changed())
         self.sp_brush.valueChanged.connect(lambda _: self.settingsChanged.emit())
         self.btn_color.clicked.connect(self._pick_color)
         self._changed()
@@ -409,14 +407,9 @@ class BlurPanel(QWidget):
     def cor(self) -> str:
         return self._color
 
-    def cor_original(self) -> bool:
-        return self.chk_original.isChecked() and self.tipo() == "solido"
-
     def _changed(self) -> None:
         solid = self.tipo() == "solido"
         self.sp_brush.setEnabled(self.tool() == "pincel")
-        self.btn_color.setEnabled(solid and not self.chk_original.isChecked())
-        self.chk_original.setEnabled(solid)
         self.sl_int.setEnabled(not solid)
         self.settingsChanged.emit()
 
@@ -429,7 +422,6 @@ class BlurPanel(QWidget):
             self._color = c
             self._paint_color_button()
             self.cmb_tipo.setCurrentIndex(self.cmb_tipo.findData("solido"))  # escolher cor = tarja
-            self.chk_original.setChecked(False)
 
 
 # ==================================================================== Fundo
@@ -569,7 +561,7 @@ class BackgroundPanel(QWidget):
 # =================================================================== Rostos
 
 class FacesPanel(QWidget):
-    """Desfoque automático de rostos: baixar modelo → detectar → ajustar ao vivo → aplicar."""
+    """Ocultar rosto (desfoque/mosaico/tarja automáticos): baixar modelo → detectar → ajustar ao vivo → aplicar."""
     downloadRequested = pyqtSignal()
     detectRequested = pyqtSignal()
     previewChanged = pyqtSignal(dict)
@@ -592,7 +584,7 @@ class FacesPanel(QWidget):
             f1.addWidget(w)
         lay.addWidget(g1)
 
-        self.g2 = QGroupBox("2. Desfoque")
+        self.g2 = QGroupBox("2. Como ocultar")
         f2 = QFormLayout(self.g2)
         self.cmb_tipo = QComboBox()
         for k, label in BLUR_TYPES.items():
@@ -609,8 +601,6 @@ class FacesPanel(QWidget):
         f2.addRow("Sensibilidade", self.sl_sens)
         f2.addRow("Margem extra", self.sl_margem)
         f2.addRow("Cor da tarja", self.btn_color)
-        self.chk_original = QCheckBox("Usar a cor original da área (média)")
-        f2.addRow(self.chk_original)
         lay.addWidget(self.g2)
         lay.addWidget(_hint(
             "Aumente a sensibilidade se algum rosto escapar; reduza se aparecerem falsos positivos. "
@@ -632,7 +622,6 @@ class FacesPanel(QWidget):
         for sl in (self.sl_int, self.sl_sens, self.sl_margem):
             sl.valueChanged.connect(lambda _=0: self._timer.start())
         self.cmb_tipo.currentIndexChanged.connect(lambda _: (self._sync(), self._timer.start()))
-        self.chk_original.toggled.connect(lambda _: (self._sync(), self._timer.start()))
         self.btn_color.clicked.connect(self._pick_color)
         self.btn_download.clicked.connect(self.downloadRequested)
         self.btn_detect.clicked.connect(self.detectRequested)
@@ -650,13 +639,11 @@ class FacesPanel(QWidget):
             "tipo": self.cmb_tipo.currentData(),
             "intensidade": self.sl_int.value(),
             "cor": self._color,
-            "cor_original": self.chk_original.isChecked() and self.cmb_tipo.currentData() == "solido",
         }
 
     def _sync(self) -> None:
         solid = self.cmb_tipo.currentData() == "solido"
-        self.btn_color.setEnabled(solid and not self.chk_original.isChecked())
-        self.chk_original.setEnabled(solid)
+        self.btn_color.setEnabled(solid)
         self.sl_int.setEnabled(not solid)
 
     def refresh_model_status(self) -> None:
@@ -688,8 +675,114 @@ class FacesPanel(QWidget):
             self._color = c
             self._paint_color_button()
             self.cmb_tipo.setCurrentIndex(self.cmb_tipo.findData("solido"))
-            self.chk_original.setChecked(False)
             self._timer.start()
+
+
+# ============================================================== Marca d'água
+
+class WatermarkPanel(QWidget):
+    """Marcar a área (pincel/retângulo) → escolher método → remover."""
+    settingsChanged = pyqtSignal()
+    clearRequested = pyqtSignal()
+    applyRequested = pyqtSignal(dict)
+    downloadRequested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+
+        g1 = QGroupBox("1. Marque a área a apagar")
+        f1 = QVBoxLayout(g1)
+        self.grp_tool = QButtonGroup(self)
+        for i, (key, text) in enumerate((("pincel", "Pincel (pinte sobre a marca)"),
+                                         ("retangulo", "Retângulo (arraste)"))):
+            rb = QRadioButton(text)
+            rb.setProperty("key", key)
+            self.grp_tool.addButton(rb, i)
+            f1.addWidget(rb)
+        self.grp_tool.button(0).setChecked(True)
+        self.sp_brush = QSpinBox()
+        self.sp_brush.setRange(2, 2000)
+        self.sp_brush.setValue(40)
+        self.sp_brush.setSuffix(" px")
+        form1 = QFormLayout()
+        form1.addRow("Tamanho do pincel", self.sp_brush)
+        f1.addLayout(form1)
+        self.lbl_marked = QLabel("Nada marcado ainda.")
+        self.lbl_marked.setObjectName("hint")
+        self.btn_clear = QPushButton("Limpar marcação")
+        f1.addWidget(self.lbl_marked)
+        f1.addWidget(self.btn_clear)
+        lay.addWidget(g1)
+
+        g2 = QGroupBox("2. Como preencher")
+        f2 = QFormLayout(g2)
+        self.cmb_metodo = QComboBox()
+        for k, label in INPAINT_METHODS.items():
+            self.cmb_metodo.addItem(label, k)
+        self.lbl_model = QLabel()
+        self.lbl_model.setObjectName("hint")
+        self.btn_download = QPushButton("Baixar modelo LaMa (~200 MB)…")
+        self.sl_expandir = _slider(0, 100, 30)
+        self.sl_raio = _slider(1, 100, 50)
+        f2.addRow("Método", self.cmb_metodo)
+        f2.addRow(self.lbl_model)
+        f2.addRow(self.btn_download)
+        f2.addRow("Expandir a marcação", self.sl_expandir)
+        f2.addRow("Raio (métodos rápidos)", self.sl_raio)
+        lay.addWidget(g2)
+
+        lay.addWidget(_hint(
+            "Marque um pouco além da marca d'água; \"Expandir\" cobre as bordas suaves. "
+            "Rápido funciona bem em fundos lisos; LaMa é melhor em texturas e áreas grandes. "
+            "Se a marca é toda a mesma posição, um único retângulo entra na receita e no lote. "
+            "Remover marca d'água de imagens de terceiros pode violar direitos autorais: "
+            "use em fotos suas ou com autorização."
+        ))
+        btns = QHBoxLayout()
+        self.btn_apply = QPushButton("Remover")
+        self.btn_apply.setObjectName("primary")
+        btns.addStretch()
+        btns.addWidget(self.btn_apply)
+        lay.addLayout(btns)
+        lay.addStretch()
+
+        self.grp_tool.idToggled.connect(lambda _id, on: on and self.settingsChanged.emit())
+        self.sp_brush.valueChanged.connect(lambda _: self.settingsChanged.emit())
+        self.cmb_metodo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
+        self.btn_clear.clicked.connect(self.clearRequested)
+        self.btn_download.clicked.connect(self.downloadRequested)
+        self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
+        self.set_marked(0)
+        self.refresh_model_status()
+
+    def tool(self) -> str:
+        return self.grp_tool.checkedButton().property("key")
+
+    def brush_size(self) -> int:
+        return self.sp_brush.value()
+
+    def metodo(self) -> str:
+        return self.cmb_metodo.currentData()
+
+    def values(self) -> dict:
+        """Parâmetros comuns do step 'remover_marca_regiao' (sem o retângulo)."""
+        return {"metodo": self.metodo(), "expandir": self.sl_expandir.value(),
+                "raio": self.sl_raio.value()}
+
+    def refresh_model_status(self) -> None:
+        lama = self.metodo() == "lama"
+        ok = inpaint_core.lama_available()
+        self.lbl_model.setVisible(lama)
+        self.lbl_model.setText("✓ Modelo LaMa baixado" if ok else "Modelo LaMa ainda não baixado")
+        self.btn_download.setVisible(lama and not ok)
+        self.sl_raio.setEnabled(not lama)
+
+    def set_marked(self, count: int) -> None:
+        self.lbl_marked.setText("Nada marcado ainda." if count == 0
+                                else f"{count} marcação(ões) feita(s).")
+        self.btn_apply.setEnabled(count > 0)
+        self.btn_clear.setEnabled(count > 0)
 
 
 # ============================================================ Redimensionar

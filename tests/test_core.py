@@ -231,11 +231,3 @@ def test_denoise_reduces_grain_keeps_edges():
 
 def test_denoise_negative_is_ignored(rgb):
     assert np.array_equal(adjustments.adjust(rgb, ruido=-50), rgb)
-
-
-def test_solid_blur_with_original_color(rgb):
-    out = blur.blur_region(rgb, 0.3, 0.3, 0.2, 0.2, tipo="solido", cor="#00ff00", cor_original=True)
-    h, w = rgb.shape[:2]
-    y, x = int(0.4 * h), int(0.4 * w)
-    area = rgb[int(0.3 * h):int(0.5 * h), int(0.3 * w):int(0.5 * w)].reshape(-1, 3).mean(axis=0)
-    assert np.abs(out[y, x].astype(float) - area).max() <= 1
