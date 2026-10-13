@@ -717,6 +717,8 @@ class WatermarkPanel(QWidget):
     clearRequested = pyqtSignal()
     applyRequested = pyqtSignal(dict)
     downloadRequested = pyqtSignal()
+    saveTemplateRequested = pyqtSignal()
+    learnRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -764,6 +766,20 @@ class WatermarkPanel(QWidget):
         f2.addRow("Raio (métodos rápidos)", self.sl_raio)
         lay.addWidget(g2)
 
+        g3 = QGroupBox("3. Para várias fotos (lote)")
+        f3 = QVBoxLayout(g3)
+        self.btn_save_tpl = QPushButton("Salvar marcação como modelo…")
+        self.btn_save_tpl.setToolTip("Guarda a marcação ancorada ao canto, com tamanho proporcional à largura. "
+                                     "No lote: passo \"Remover marca d'água (modelo de máscara)\".")
+        self.lbl_tpl = QLabel("")
+        self.lbl_tpl.setObjectName("hint")
+        self.btn_learn = QPushButton("Aprender marca translúcida de uma pasta…")
+        self.btn_learn.setToolTip("Para marca branca/preta translúcida na mesma posição em muitas fotos: "
+                                  "estima a opacidade e desfaz sem inventar textura.")
+        for w in (self.btn_save_tpl, self.lbl_tpl, self.btn_learn):
+            f3.addWidget(w)
+        lay.addWidget(g3)
+
         lay.addWidget(_hint(
             "Marque um pouco além da marca d'água; \"Expandir\" cobre as bordas suaves. "
             "Rápido funciona bem em fundos lisos; LaMa é melhor em texturas e áreas grandes. "
@@ -783,6 +799,8 @@ class WatermarkPanel(QWidget):
         self.sp_brush.valueChanged.connect(lambda _: self.settingsChanged.emit())
         self.cmb_metodo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
         self.btn_clear.clicked.connect(self.clearRequested)
+        self.btn_save_tpl.clicked.connect(self.saveTemplateRequested)
+        self.btn_learn.clicked.connect(self.learnRequested)
         self.btn_download.clicked.connect(self.downloadRequested)
         self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
         self.set_marked(0)
@@ -815,6 +833,10 @@ class WatermarkPanel(QWidget):
                                 else f"{count} marcação(ões) feita(s).")
         self.btn_apply.setEnabled(count > 0)
         self.btn_clear.setEnabled(count > 0)
+        self.btn_save_tpl.setEnabled(count > 0)
+
+    def set_template_name(self, nome: str | None) -> None:
+        self.lbl_tpl.setText(f"Modelo salvo: {nome}" if nome else "")
 
 
 # ============================================================ Redimensionar

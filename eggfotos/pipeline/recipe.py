@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .operations import apply_step, normalize_step
+from .operations import apply_step, get_operation, normalize_step
 
 OUTPUT_FORMATS = {"mesmo": "Mesmo do original", "jpg": "JPG", "png": "PNG", "webp": "WEBP"}
 
@@ -50,7 +50,11 @@ class Recipe:
             errors.append("A receita não tem nenhum passo.")
         for i, step in enumerate(self.passos, 1):
             try:
-                normalize_step(step)
+                norm = normalize_step(step)
+                op = get_operation(norm["op"])
+                problem = op.check(norm) if op.check else None
+                if problem:
+                    errors.append(f"Passo {i}: {problem}")
             except ValueError as e:
                 errors.append(f"Passo {i}: {e}")
         try:

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__
-from ..core import background, faces, geometry, inpaint, segment
+from ..core import background, faces, geometry, inpaint, segment, watermark
 from ..core.blur import blur_with_mask
 from ..core.history import History
 from ..core.image_io import OPEN_FILTER, is_supported, load_image, save_image
@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self._sam_mask: np.ndarray | None = None
         self._click_busy = False
         self._wm_strokes = 0
+        self._wm_template: str | None = None      # nome do modelo salvo para a marcação atual
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
         self._task: TaskWorker | None = None
         self._task_dialog: QProgressDialog | None = None
@@ -224,6 +225,8 @@ class MainWindow(QMainWindow):
         wp.clearRequested.connect(self._wm_clear)
         wp.applyRequested.connect(self._apply_watermark)
         wp.downloadRequested.connect(self._download_lama)
+        wp.saveTemplateRequested.connect(self._wm_save_template)
+        wp.learnRequested.connect(self._wm_learn)
 
         self.btn_compare.toggled.connect(lambda on: self._show_original() if on else self._hide_original())
 
@@ -768,6 +771,8 @@ class MainWindow(QMainWindow):
         self._wm_rects = []
         self._wm_brush = False
         self._wm_strokes = 0
+        self._wm_template = None
+        self.wm_panel.set_template_name(None)
         self.wm_panel.set_marked(0)
 
     def _wm_count(self) -> int:
@@ -791,6 +796,8 @@ class MainWindow(QMainWindow):
         if brush:
             self._wm_brush = True
             self._wm_strokes += 1
+        self._wm_template = None  # a marcação mudou: o modelo salvo não vale mais
+        self.wm_panel.set_template_name(None)
         self.wm_panel.set_marked(self._wm_count())
         self._wm_show()
 
@@ -803,6 +810,53 @@ class MainWindow(QMainWindow):
     def _wm_clear(self) -> None:
         self._wm_reset()
         self._cancel_preview()
+
+    def _wm_save_template(self) -> None:
+        if self._wm_mask is None:
+            return
+        nome, ok = QInputDialog.getText(self, "Salvar modelo de marca",
+                                        "Nome do modelo (ex.: logo-canto):", text="logo")
+        if not ok or not nome.strip():
+            return
+        try:
+            watermark.save_mask_template(nome, watermark.make_mask_template(self._wm_mask))
+        except ValueError as e:
+            QMessageBox.warning(self, APP_NAME, str(e))
+            return
+        self._wm_template = watermark.safe_name(nome)
+        self.wm_panel.set_template_name(self._wm_template)
+        QMessageBox.information(
+            self, APP_NAME,
+            f"Modelo '{self._wm_template}' salvo em {watermark.marks_dir()}.\n\n"
+            "Ao clicar em Remover, o passo entra na receita. No lote, use \"Remover marca d'água "
+            "(modelo de máscara)\". A marca é ancorada ao canto mais próximo e escala com a largura.")
+
+    def _wm_learn(self) -> None:
+        pasta = QFileDialog.getExistingDirectory(
+            self, "Pasta com várias fotos que têm a MESMA marca", self._last_dir())
+        if not pasta:
+            return
+        cores = ["Branca", "Preta"]
+        cor, ok = QInputDialog.getItem(self, "Cor da marca", "A marca é:", cores, 0, False)
+        if not ok:
+            return
+        nome, ok = QInputDialog.getText(self, "Nome do modelo", "Nome do modelo:", text="marca_aprendida")
+        if not ok or not nome.strip():
+            return
+        value = 255 if cor == "Branca" else 0
+
+        def done(result):
+            t, skipped = result
+            cover = float((t.alpha > 0).mean()) * 100
+            extra = f"\n{skipped} foto(s) ignorada(s) (proporção diferente ou ilegível)." if skipped else ""
+            QMessageBox.information(
+                self, APP_NAME,
+                f"Marca aprendida com {t.n} fotos (cobre {cover:.1f}% da área).{extra}\n\n"
+                f"Modelo '{watermark.safe_name(nome)}' salvo. No lote, use \"Remover marca d'água "
+                "translúcida (aprendida)\". Se sobrar um resto da marca ou aparecer um contorno, ajuste a Força (80–120%).")
+
+        self._run_task("Aprendendo a marca (pode levar alguns segundos)…",
+                       lambda: watermark.learn_from_folder(pasta, nome, value), done)
 
     def _download_lama(self) -> None:
         r = QMessageBox.question(
@@ -829,7 +883,9 @@ class MainWindow(QMainWindow):
         img, mask = self.image, self._wm_mask
         # um único retângulo, sem pincel, vira receita reproduzível; o resto é edição manual
         step = None
-        if not self._wm_brush and len(self._wm_rects) == 1:
+        if self._wm_template:  # marcação salva como modelo: reproduzível em qualquer foto
+            step = get_operation("remover_marca_modelo").new_step(nome=self._wm_template, **values)
+        elif not self._wm_brush and len(self._wm_rects) == 1:
             x, y, w, h = self._wm_rects[0]
             step = get_operation("remover_marca_regiao").new_step(x=x, y=y, w=w, h=h, **values)
         self._run_task("Removendo a marca d'água…",

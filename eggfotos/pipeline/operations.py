@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core import adjustments, background, blur, faces, filters, geometry, inpaint
+from ..core import adjustments, background, blur, faces, filters, geometry, inpaint, watermark
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,7 @@ class Operation:
     func: Callable[..., np.ndarray]
     params: tuple[Param, ...] = field(default_factory=tuple)
     description: str = ""
+    check: Callable[[dict], str | None] | None = None  # valida o passo (ex.: arquivo existe); devolve o erro
 
     def defaults(self) -> dict:
         return {p.name: p.default for p in self.params}
@@ -143,6 +144,10 @@ def describe_step(step: dict) -> str:
         return f"{op.label} — {blur.BLUR_TYPES[s['tipo']]}, sensibilidade {s['sensibilidade']}"
     if k == "remover_marca_regiao":
         return f"{op.label} — {inpaint.METHODS[s['metodo']].split(' (')[0]}, {s['w'] * 100:.0f}% × {s['h'] * 100:.0f}%"
+    if k == "remover_marca_modelo":
+        return f"{op.label} — modelo '{s['nome']}', {inpaint.METHODS[s['metodo']].split(' (')[0]}"
+    if k == "remover_marca_estimada":
+        return f"{op.label} — modelo '{s['nome']}' ({s['forca']}%)"
     if k == "recortar_relativo":
         return f"{op.label} — {s['w'] * 100:.0f}% × {s['h'] * 100:.0f}%"
     return op.label
@@ -278,4 +283,36 @@ register(Operation(
         Param("raio", "Raio do preenchimento", "int", 50, 1, 100),
     ),
     "Para marcas em posição fixa. LaMa exige o modelo baixado (aba Marca d'água).",
+))
+
+
+def _check_template(kind: str):
+    def check(step: dict) -> str | None:
+        nome = step.get("nome", "")
+        if not nome or not watermark.template_exists(nome, kind):
+            return f"modelo de marca '{nome}' não existe (aba Marca d'água → salvar/aprender modelo)"
+        return None
+    return check
+
+
+register(Operation(
+    "remover_marca_modelo", "Remover marca d'água (modelo de máscara)", watermark.remove_with_template,
+    (
+        Param("nome", "Modelo", "marca_mascara", ""),
+        Param("metodo", "Método", "choice", "telea", choices=tuple(inpaint.METHODS.items())),
+        Param("expandir", "Expandir a máscara", "int", 30, 0, 100),
+        Param("raio", "Raio do preenchimento", "int", 50, 1, 100),
+    ),
+    "Máscara salva na aba Marca d'água, ancorada ao canto; serve em fotos de tamanhos diferentes.",
+    _check_template(watermark.KIND_MASK),
+))
+
+register(Operation(
+    "remover_marca_estimada", "Remover marca d'água translúcida (aprendida)", watermark.remove_estimated,
+    (
+        Param("nome", "Modelo", "marca_alpha", ""),
+        Param("forca", "Força (%)", "int", 100, 0, 150),
+    ),
+    "Marca branca/preta translúcida repetida em várias fotos; exige a mesma proporção.",
+    _check_template(watermark.KIND_ALPHA),
 ))

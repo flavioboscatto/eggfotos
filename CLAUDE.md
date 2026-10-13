@@ -34,6 +34,10 @@ eggfotos/
                            blur_background / blur_background_auto: desfoca o que não é o objeto
     inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
                            remove_region (retângulo relativo, vai pro lote); só processa a região da máscara
+    watermark.py           modelos de marca em ~/.eggfotos/marcas (env EGGFOTOS_MARCAS substitui):
+                           MaskTemplate (marcação ancorada ao canto, tamanho/margens ÷ largura da foto,
+                           + inpaint) e AlphaTemplate (estima α de marca translúcida branca/preta em
+                           N fotos e inverte I=(J−α·cor)/(1−α)); ops remover_marca_modelo/_estimada
     segment.py             MobileSAM (ONNX): embed(img) [~0,5 s, cacheável] → predict(emb, pontos) [instantâneo];
                            o encoder NÃO redimensiona: a foto vai com lado maior = 1024 e o decoder
                            recebe orig_im_size = tamanho real; pontos relativos, rótulo 1/0
@@ -91,7 +95,8 @@ tests/                     pytest do core e do pipeline
   (que o rembg instala, mas não é importado). Se a borda de cabelo/pelo ficar fraca, avaliar
   `pymatting.estimate_foreground_ml` (melhor, porém lento e com JIT na 1ª execução).
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
-- Seleção por cliques (MobileSAM) não é reproduzível em lote: o resultado entra no histórico sem step (como o pincel).
+- Seleção por cliques (MobileSAM) não é reproduzível em lote por si só: entra no histórico sem step (como o pincel), a menos que a marcação seja salva como modelo (aba Marca d'água), aí vira `remover_marca_modelo`.
+- Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
 - Botão Original é um interruptor (clique liga/desliga); ao editar ou trocar de aba ele desliga sozinho.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.
@@ -107,7 +112,7 @@ tests/                     pytest do core e do pipeline
 | 5 | Desfoque de fundo (opção na aba Fundo, reusa `compute_matte`) e desfoque automático de rostos (aba **Ocultar rosto**, YuNet ~230 KB, ops `desfocar_fundo` e `desfocar_rostos`) | feito, falta testar com foto real |
 | 6 | Marca d'água: aba **Marca d'água** (pincel/retângulo/clique acumulam uma máscara), Telea/Navier-Stokes sem modelo e LaMa (ONNX ~200 MB, baixado sob demanda); op `remover_marca_regiao` (1 retângulo) no lote | feito e testado com o modelo real |
 | 7 | MobileSAM: seleção por cliques na aba **Fundo** (alternativa à detecção automática; vira a máscara do fundo) e ferramenta "Clique" na aba **Marca d'água** | feito e testado com o modelo real |
-| 8 | Marca d'água em lote: máscara ancorada + estimativa multi-imagem / inversão de alpha | — |
+| 8 | Marca d'água em lote: modelo de máscara ancorada (`remover_marca_modelo`) e marca translúcida aprendida de uma pasta (`remover_marca_estimada`, inversão de alpha); `Operation.check` valida modelos antes do lote | feito; testado com marcas sintéticas, falta testar com marcas reais |
 | 9 | (Opcional) inpainting por difusão com GPU (torch, diffusers) | — |
 
 Modelos ONNX: baixados sob demanda (botão nas abas Fundo, Ocultar rosto e Marca d'água) para `~/.eggfotos/modelos`

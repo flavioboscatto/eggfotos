@@ -69,3 +69,11 @@ def fake_sam(monkeypatch):
 
     monkeypatch.setattr(segment, "_session", lambda kind: _Enc() if kind == "encoder" else _Dec())
     return segment
+
+
+@pytest.fixture
+def marks_tmp(monkeypatch, tmp_path):
+    """Pasta de modelos de marca isolada (não toca em ~/.eggfotos/marcas)."""
+    from eggfotos.core import watermark
+    monkeypatch.setattr(watermark, "marks_dir", lambda: tmp_path)
+    return tmp_path

@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core import watermark
 from .color_picker import choose_color, style_color_button
 from ..pipeline.operations import REGISTRY, Operation, describe_step, get_operation, normalize_step
 from ..pipeline.recipe import (
@@ -99,6 +100,17 @@ class StepEditor(QWidget):
                     style_color_button(btn, c)
                     emit()
             w.clicked.connect(pick)
+        elif p.kind in ("marca_mascara", "marca_alpha"):
+            kind = watermark.KIND_MASK if p.kind == "marca_mascara" else watermark.KIND_ALPHA
+            w = QComboBox()
+            names = watermark.list_templates(kind)
+            if str(value) and str(value) not in names:
+                names.append(str(value))  # modelo da receita que não existe mais: mantém visível
+            w.addItems(names)
+            if not names:
+                w.setPlaceholderText("nenhum modelo salvo — crie na aba Marca d'água")
+            w.setCurrentText(str(value)) if str(value) else None
+            w.currentIndexChanged.connect(emit)
         else:
             w = QLineEdit(str(value))
             w.textChanged.connect(emit)
@@ -118,6 +130,8 @@ class StepEditor(QWidget):
                 out[p.name] = w.currentData()
             elif p.kind == "color":
                 out[p.name] = w.property("color")
+            elif p.kind in ("marca_mascara", "marca_alpha"):
+                out[p.name] = w.currentText()
             else:
                 out[p.name] = w.text()
         return out

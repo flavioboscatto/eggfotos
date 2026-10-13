@@ -11,9 +11,17 @@ from eggfotos.pipeline.runner import (
 )
 
 
-def test_every_operation_default_step_runs(rgb, fake_matte, fake_faces):
+def test_every_operation_default_step_runs(rgb, fake_matte, fake_faces, marks_tmp):
+    from eggfotos.core import watermark
+    m = np.zeros(rgb.shape[:2], np.uint8)
+    m[10:30, 120:190] = 255
+    watermark.save_mask_template("t", watermark.make_mask_template(m))
+    watermark.save_alpha_template("t", watermark.AlphaTemplate(np.full(rgb.shape[:2], 0.2, np.float32), 255, 10))
     for key, op in ops.REGISTRY.items():
-        out = ops.apply_step(rgb, op.new_step())
+        step = op.new_step()
+        if key.startswith("remover_marca_") and "nome" in step:
+            step["nome"] = "t"
+        out = ops.apply_step(rgb, step)
         assert out.dtype == np.uint8, key
 
 
