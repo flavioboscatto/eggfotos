@@ -207,6 +207,9 @@ def suggest_settings(img: np.ndarray, mask: np.ndarray, lama_disponivel: bool = 
 
 # ============================================================ procurar candidatas
 
+TIPOS = {"texto": "Texto", "logotipo": "Logotipo"}
+
+
 @dataclass
 class Candidate:
     x: float
@@ -216,9 +219,13 @@ class Candidate:
     score: float
     polaridade: str     # "clara" | "escura"
     lugar: str          # descrição curta ("canto inferior direito"…)
+    tipo: str = "texto"  # "texto" | "logotipo"
 
     def rect(self) -> tuple[float, float, float, float]:
         return self.x, self.y, self.w, self.h
+
+    def rotulo(self) -> str:
+        return f"{TIPOS.get(self.tipo, self.tipo)} · {self.lugar}"
 
 
 @dataclass
@@ -240,14 +247,19 @@ def _place(x: float, y: float, w: float, h: float) -> str:
     return f"canto {lin} {col}"
 
 
-def _stroke_maps(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Traços finos claros e escuros (top-hat/black-hat), com limiar fixo em níveis de cinza."""
+def _hat_maps(gray: np.ndarray, kernel_rel: float, t: float, kmin: int = 5, kmax: int = 15,
+              blur: float = 0.8) -> tuple[np.ndarray, np.ndarray]:
+    """Estruturas claras e escuras MENORES que o núcleo (top-hat / black-hat) acima do limiar `t`."""
     side = max(gray.shape[:2])
-    k = int(np.clip(round(0.014 * side), 5, 15)) | 1
+    k = int(np.clip(round(kernel_rel * side), kmin, kmax)) | 1
     kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    g = cv2.GaussianBlur(gray, (0, 0), 0.8)
-    t = 10
+    g = cv2.GaussianBlur(gray, (0, 0), blur)
     return (cv2.morphologyEx(g, cv2.MORPH_TOPHAT, kern) > t), (cv2.morphologyEx(g, cv2.MORPH_BLACKHAT, kern) > t)
+
+
+def _stroke_maps(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Traços finos claros e escuros (letras), com limiar fixo em níveis de cinza."""
+    return _hat_maps(gray, 0.014, 10)
 
 
 def _repeated(s: np.ndarray) -> bool:
@@ -272,21 +284,18 @@ def _repeated(s: np.ndarray) -> bool:
     return float(ac[far].max()) > 0.3
 
 
-def find_candidates(img: np.ndarray, max_n: int = 3) -> Candidates:
-    """Procura regiões com traços finos coerentes (claros OU escuros) concentrados, que contrastem com
-    o resto da foto. Sem IA: serve como ponto de partida, nunca como verdade."""
-    rgb, _ = split_alpha(img)
-    H, W = rgb.shape[:2]
-    s = min(1.0, 800.0 / max(H, W))
-    small = cv2.resize(np.ascontiguousarray(rgb), (max(1, round(W * s)), max(1, round(H * s))),
-                       interpolation=cv2.INTER_AREA) if s < 1.0 else np.ascontiguousarray(rgb)
-    gray = _gray(small)
+def _border_bonus(x0: float, y0: float, x1: float, y1: float, w: int, h: int) -> float:
+    """1,0 no meio da foto, até 1,6 colado numa borda (marcas ficam perto das bordas)."""
+    d = min(x0 / w, 1 - x1 / w, y0 / h, 1 - y1 / h)
+    return 1.0 + 0.6 * float(np.clip(1.0 - d / 0.25, 0, 1))
+
+
+def _text_candidates(gray: np.ndarray, max_n: int) -> list[Candidate]:
+    """Texto e traços finos: concentração local de traços (top-hat/black-hat fino)."""
     h, w = gray.shape
     side = max(h, w)
     win = max(15, int(0.16 * side)) | 1
     claras, escuras = _stroke_maps(gray)
-    repetida = _repeated(claras | escuras)
-
     achados: list[Candidate] = []
     for pol, S in (("clara", claras), ("escura", escuras)):
         S8 = S.astype(np.uint8)
@@ -294,7 +303,6 @@ def find_candidates(img: np.ndarray, max_n: int = 3) -> Candidates:
                              borderType=cv2.BORDER_CONSTANT)
         base = float(np.median(dens))
         score = dens - base
-        # a marca não é a foto toda: preferimos concentração local (e leve preferência pelas bordas)
         yy, xx = np.mgrid[0:h, 0:w]
         borda = np.minimum.reduce([xx / w, 1 - xx / w, yy / h, 1 - yy / h])
         score = score * (1.0 + 0.6 * np.clip(1.0 - borda / 0.25, 0, 1))
@@ -302,6 +310,7 @@ def find_candidates(img: np.ndarray, max_n: int = 3) -> Candidates:
         kj = int(np.clip(round(0.03 * side), 5, 41)) | 1
         grupos = cv2.morphologyEx(S8, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kj, kj)))
         n, lab, st, _ = cv2.connectedComponentsWithStats(grupos, connectivity=8)
+        nr, lab_raw, st_raw, _ = cv2.connectedComponentsWithStats(S8, connectivity=8)
         taken = np.zeros((h, w), bool)
         for _ in range(max_n):
             masked = np.where(taken, -1.0, score)
@@ -327,16 +336,107 @@ def find_candidates(img: np.ndarray, max_n: int = 3) -> Candidates:
             rx1, ry1 = min(w, bx1 + m), min(h, by1 + m)
             if rx1 - rx0 < 6 or ry1 - ry0 < 4:
                 continue
+            # várias peças pequenas e alinhadas = letras; uma peça só (ou poucas) = símbolo
+            letras = [j for j in range(1, nr) if st_raw[j, cv2.CC_STAT_AREA] >= 4
+                      and bx0 <= st_raw[j, cv2.CC_STAT_LEFT] <= bx1 and by0 <= st_raw[j, cv2.CC_STAT_TOP] <= by1]
+            largo = (bx1 - bx0) >= 2.2 * (by1 - by0)       # texto corre em linha; selo/símbolo é mais quadrado
+            tipo = "texto" if len(letras) >= 4 and largo else "logotipo"
             x, y, cw, ch = rx0 / w, ry0 / h, (rx1 - rx0) / w, (ry1 - ry0) / h
-            achados.append(Candidate(x, y, cw, ch, v, pol, _place(x, y, cw, ch)))
+            achados.append(Candidate(x, y, cw, ch, v, pol, _place(x, y, cw, ch), tipo))
+    return achados
 
-    achados.sort(key=lambda c: -c.score)
+
+def _logo_candidates(gray: np.ndarray) -> list[Candidate]:
+    """Logotipos e selos: formas maiores e sólidas (claras ou escuras), isoladas, perto das bordas.
+
+    Top-hat/black-hat com núcleos grandes pegam o que é mais claro/escuro que a vizinhança e menor
+    que o núcleo. Só vale se a forma for compacta, preenchida e a área em volta for calma."""
+    h, w = gray.shape
+    side = max(h, w)
     out: list[Candidate] = []
-    for c in achados:                 # tira candidatas que se sobrepõem muito (claras × escuras)
-        if all(_iou(c, o) < 0.4 for o in out):
+    cobertura = []
+    mapas = []
+    for pol, idx in (("clara", 0), ("escura", 1)):
+        S = np.zeros((h, w), bool)
+        for kr in (0.05, 0.12):
+            S |= _hat_maps(gray, kr, 14, kmin=7, kmax=101, blur=1.0)[idx]
+        S8 = cv2.morphologyEx(S.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        cobertura.append(float(S8.mean()))
+        mapas.append((pol, S8))
+    if max(cobertura) > 0.12:         # foto cheia de formas: nada se destaca
+        return out
+    kj = int(np.clip(round(0.025 * side), 5, 31)) | 1
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kj, kj))
+    for pol, S8 in mapas:
+        grupos = cv2.morphologyEx(S8, cv2.MORPH_CLOSE, kern)
+        n, lab, st, _ = cv2.connectedComponentsWithStats(grupos, connectivity=8)
+        for i in range(1, n):
+            x0, y0 = int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP])
+            bw, bh = int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
+            frac = bw * bh / float(h * w)
+            if not 0.0015 < frac < 0.18 or bw > 0.5 * w or bh > 0.5 * h:
+                continue
+            box = S8[y0:y0 + bh, x0:x0 + bw]
+            fill = float(box.mean())
+            if fill < 0.12:
+                continue
+            m = int(max(bw, bh) * 0.5) + 2
+            ya, yb, xa, xb = max(0, y0 - m), min(h, y0 + bh + m), max(0, x0 - m), min(w, x0 + bw + m)
+            anel = S8[ya:yb, xa:xb].astype(np.float32)
+            area_anel = (yb - ya) * (xb - xa) - bw * bh
+            dens_anel = (float(anel.sum()) - float(box.sum())) / max(1, area_anel)
+            isolamento = fill - dens_anel
+            if isolamento < 0.15:
+                continue
+            mg = int(0.006 * side) + 2
+            rx0, ry0, rx1, ry1 = max(0, x0 - mg), max(0, y0 - mg), min(w, x0 + bw + mg), min(h, y0 + bh + mg)
+            score = isolamento * _border_bonus(rx0, ry0, rx1, ry1, w, h) * 0.5
+            x, y, cw, ch = rx0 / w, ry0 / h, (rx1 - rx0) / w, (ry1 - ry0) / h
+            out.append(Candidate(x, y, cw, ch, float(score), pol, _place(x, y, cw, ch), "logotipo"))
+    return out
+
+
+def _contained(a: Candidate, b: Candidate, frac: float = 0.7) -> bool:
+    """`a` está (quase) todo dentro de `b`?"""
+    ix = max(0.0, min(a.x + a.w, b.x + b.w) - max(a.x, b.x))
+    iy = max(0.0, min(a.y + a.h, b.y + b.h) - max(a.y, b.y))
+    return ix * iy >= frac * a.w * a.h
+
+
+def find_candidates(img: np.ndarray, max_n: int = 5) -> Candidates:
+    """Procura textos e logotipos que parecem marca d'água: traços finos coerentes (texto) e formas
+    sólidas isoladas (logotipo/selo), claros OU escuros, de preferência perto das bordas.
+    Sem IA: serve como ponto de partida, nunca como verdade — o usuário aceita ou descarta."""
+    rgb, _ = split_alpha(img)
+    H, W = rgb.shape[:2]
+    s = min(1.0, 800.0 / max(H, W))
+    small = cv2.resize(np.ascontiguousarray(rgb), (max(1, round(W * s)), max(1, round(H * s))),
+                       interpolation=cv2.INTER_AREA) if s < 1.0 else np.ascontiguousarray(rgb)
+    gray = _gray(small)
+    claras, escuras = _stroke_maps(gray)
+    repetida = _repeated(claras | escuras)
+
+    # os logotipos são medidos numa cópia ainda menor (núcleos grandes ficam rápidos)
+    g2 = gray if max(gray.shape) <= 400 else cv2.resize(
+        gray, (max(1, round(gray.shape[1] * 400 / max(gray.shape))), max(1, round(gray.shape[0] * 400 / max(gray.shape)))),
+        interpolation=cv2.INTER_AREA)
+    textos = sorted(_text_candidates(gray, max_n), key=lambda c: -c.score)
+    logos = sorted(_logo_candidates(g2), key=lambda c: -c.score)
+    out: list[Candidate] = []
+    for c in textos:
+        if all(_iou(c, o) < 0.4 and not _contained(c, o) for o in out):
             out.append(c)
-        if len(out) >= max_n:
-            break
+    for c in logos:                                 # texto achado tem prioridade sobre o mesmo trecho visto como logotipo
+        iguais = [o for o in out if _iou(c, o) >= 0.4 or _contained(c, o)]
+        if iguais:
+            continue
+        miudos = [o for o in out if _contained(o, c) and o.w * o.h * 2.5 <= c.w * c.h]
+        out = [o for o in out if o not in miudos]   # um logotipo que engloba textos menores os substitui
+        if any(_contained(o, c) for o in out):
+            continue
+        out.append(c)
+    out.sort(key=lambda c: -c.score)
+    out = out[:max_n]
     return Candidates(out, repetida)
 
 

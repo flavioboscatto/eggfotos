@@ -74,6 +74,8 @@ class MainWindow(QMainWindow):
         self._wm_loose: np.ndarray | None = None  # marcação solta, guardada antes do "apertar aos traços"
         self._wm_template: str | None = None      # nome do modelo salvo para a marcação atual
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
+        self._wm_cands: list[suggest.Candidate] = []   # candidatas da busca automática, aguardando aceitar/descartar
+        self._wm_partial: list[int] | None = None      # aceitar só uma parte: candidatas à espera do retângulo
         self._task: TaskWorker | None = None
         self._zombies: list[TaskWorker] = []  # threads vivas (inclui as canceladas)
         self._task_dialog: QProgressDialog | None = None
@@ -270,6 +272,10 @@ class MainWindow(QMainWindow):
         wp.snapRequested.connect(self._wm_snap)
         wp.snapUndoRequested.connect(self._wm_snap_undo)
         wp.findRequested.connect(self._wm_find)
+        wp.candidatesChanged.connect(self._wm_show)
+        wp.acceptRequested.connect(self._wm_accept)
+        wp.partialRequested.connect(self._wm_partial_start)
+        wp.discardRequested.connect(self._wm_discard)
         wp.suggestRequested.connect(self._wm_suggest)
         wp.saveTemplateRequested.connect(self._wm_save_template)
         wp.learnRequested.connect(self._wm_learn)
@@ -423,6 +429,7 @@ class MainWindow(QMainWindow):
             self._sync_blur_tool()
         elif idx == TAB_WATERMARK:
             self._sync_wm_tool()
+            self._wm_show()
         else:
             self.canvas.set_tool(TOOL_NAV)
 
@@ -548,6 +555,9 @@ class MainWindow(QMainWindow):
         if self.tabs.currentIndex() == TAB_WATERMARK:
             H, W = self.image.shape[:2]
             x, y, w, h = rect
+            if self._wm_partial is not None:
+                self._wm_partial_done((x / W, y / H, w / W, h / H))
+                return
             self._wm_add_mask(inpaint.rect_mask(self.image.shape, x / W, y / H, w / W, h / H),
                               brush=False, rect=(x / W, y / H, w / W, h / H))
             return
@@ -1009,6 +1019,9 @@ class MainWindow(QMainWindow):
         self._wm_strokes = 0
         self._wm_template = None
         self._wm_loose = None
+        self._wm_cands, self._wm_partial = [], None
+        self.wm_panel.set_candidates(None)
+        self.wm_panel.set_partial_mode(False)
         self.wm_panel.set_snap_undo(False)
         self.wm_panel.set_template_name(None)
         self.wm_panel.set_marked(0)
@@ -1019,6 +1032,9 @@ class MainWindow(QMainWindow):
     def _sync_wm_tool(self) -> None:
         if self.tabs.currentIndex() != TAB_WATERMARK:
             return
+        if self._wm_partial is not None:          # mexeu na ferramenta: desiste de "aceitar só uma parte"
+            self._wm_partial = None
+            self.wm_panel.set_partial_mode(False)
         tool = self.wm_panel.tool()
         if tool == "pincel":
             self.canvas.set_tool(TOOL_BRUSH)
@@ -1034,7 +1050,7 @@ class MainWindow(QMainWindow):
         def pack(m):
             return None if m is None else (np.packbits(m > 0), m.shape)   # 1 bit/pixel: barato
         return (pack(self._wm_mask), list(self._wm_rects), self._wm_strokes, self._wm_brush,
-                pack(self._wm_loose))
+                pack(self._wm_loose), list(self._wm_cands))
 
     def _wm_restore(self, snap: tuple) -> None:
         def unpack(p):
@@ -1043,17 +1059,16 @@ class MainWindow(QMainWindow):
             bits, shape = p
             n = shape[0] * shape[1]
             return (np.unpackbits(bits)[:n].reshape(shape) * 255).astype(np.uint8)
-        mask, rects, strokes, brush, loose = snap
+        mask, rects, strokes, brush, loose, cands = snap
+        self._wm_cands, self._wm_partial = list(cands), None
+        self._wm_sync_cands()
         self._wm_mask, self._wm_loose = unpack(mask), unpack(loose)
         self._wm_rects, self._wm_strokes, self._wm_brush = list(rects), strokes, brush
         self._wm_template = None
         self.wm_panel.set_template_name(None)
         self.wm_panel.set_snap_undo(self._wm_loose is not None)
         self.wm_panel.set_marked(self._wm_count())
-        if self._wm_mask is None or not self._wm_mask.any():
-            self._cancel_preview()
-        else:
-            self._wm_show()
+        self._wm_show()
 
     def _wm_checkpoint(self) -> None:
         """Guarda o estado ANTES de mudar a marcação (chame antes de cada alteração)."""
@@ -1125,8 +1140,12 @@ class MainWindow(QMainWindow):
             self.act_redo.setText(f"Refazer {self.history.redo_label()}".strip())
 
     def _wm_add_mask(self, mask: np.ndarray, brush: bool,
-                     rect: tuple[float, float, float, float] | None = None) -> None:
+                     rect: tuple[float, float, float, float] | None = None,
+                     cand: "suggest.Candidate | None" = None) -> None:
         self._wm_checkpoint()
+        if cand is not None and cand in self._wm_cands:     # candidata aceita sai da lista (o desfazer a traz de volta)
+            self._wm_cands.remove(cand)
+            self._wm_sync_cands()
         if rect is not None:
             self._wm_rects.append(rect)
         self._wm_mask = mask.copy() if self._wm_mask is None else np.maximum(self._wm_mask, mask)
@@ -1141,10 +1160,95 @@ class MainWindow(QMainWindow):
         self._wm_show()
 
     def _wm_show(self) -> None:
-        """Mostra a marcação em vermelho translúcido sobre a foto."""
-        if self._wm_mask is None or self.image is None:
+        """Mostra a marcação em vermelho translúcido e as candidatas numeradas em laranja."""
+        if self.image is None:
             return
-        self._show_mask_overlay(self._wm_mask, (255, 40, 40))
+        mask = self._wm_mask if (self._wm_mask is not None and self._wm_mask.any()) else None
+        cands = list(self._wm_cands)
+        if mask is None and not cands:
+            self._cancel_preview()
+            return
+        marcadas = set(self.wm_panel.checked_candidates())
+        atual = self.wm_panel.current_candidate()
+
+        def render():
+            ph, pw = self.proxy.shape[:2]
+            out = self.proxy.copy()
+            if out.shape[2] == 3 and mask is not None:
+                m = cv2.resize(mask, (pw, ph), interpolation=cv2.INTER_NEAREST) > 0
+                out[m] = (out[m].astype(np.float32) * 0.4 + np.array((255, 40, 40), np.float32) * 0.6).astype(np.uint8)
+            esp = max(1, round(pw / 450))
+            escala = max(0.5, pw / 1000)
+            for i, c in enumerate(cands):
+                x0, y0 = int(c.x * pw), int(c.y * ph)
+                x1, y1 = max(x0 + 2, int((c.x + c.w) * pw)), max(y0 + 2, int((c.y + c.h) * ph))
+                cor = (255, 165, 0) if i in marcadas else (130, 150, 200)
+                if i in marcadas and out.shape[2] == 3:
+                    reg = out[y0:y1, x0:x1]
+                    reg[:] = (reg.astype(np.float32) * 0.78 + np.array(cor, np.float32) * 0.22).astype(np.uint8)
+                cv2.rectangle(out, (x0, y0), (x1, y1), cor, esp * (3 if i == atual else 1))
+                tx, ty = x0 + 3, max(int(14 * escala) + 2, y0 - 4)
+                cv2.putText(out, str(i + 1), (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, escala, (0, 0, 0), esp + 2, cv2.LINE_AA)
+                cv2.putText(out, str(i + 1), (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, escala, cor, esp, cv2.LINE_AA)
+            self.canvas.set_preview(out, 1.0 / self.proxy_scale)
+        self._run_preview(render)
+
+    # --- candidatas da busca automática: aceitar, aceitar em parte, descartar
+    def _wm_sync_cands(self) -> None:
+        self.wm_panel.set_candidates([c.rotulo() for c in self._wm_cands])
+
+    def _wm_accept(self, indices: list[int]) -> None:
+        if self.image is None or not indices:
+            self.statusBar().showMessage("Marque ao menos uma candidata.", 3000)
+            return
+        sel = [self._wm_cands[i] for i in indices if i < len(self._wm_cands)]
+        for c in sel:
+            x, y, w, h = c.rect()
+            self._wm_add_mask(inpaint.rect_mask(self.image.shape, x, y, w, h), brush=False, rect=c.rect(), cand=c)
+        self.statusBar().showMessage(f"{len(sel)} candidata(s) aceita(s). Ctrl+Z desfaz uma por vez.", 5000)
+
+    def _wm_discard(self, indices: list[int]) -> None:
+        if not indices:
+            self.statusBar().showMessage("Marque ao menos uma candidata.", 3000)
+            return
+        self._wm_partial = None
+        self.wm_panel.set_partial_mode(False)
+        self._wm_cands = [c for i, c in enumerate(self._wm_cands) if i not in set(indices)]
+        self._wm_sync_cands()
+        self._wm_show()
+        self._sync_wm_tool()
+
+    def _wm_partial_start(self, indices: list[int]) -> None:
+        if self.image is None or not indices:
+            self.statusBar().showMessage("Marque ao menos uma candidata.", 3000)
+            return
+        self._wm_partial = list(indices)
+        self.wm_panel.set_partial_mode(True)
+        self.canvas.region_shape = "retangulo"
+        self.canvas.set_tool(TOOL_REGION)
+        self.statusBar().showMessage("Arraste um retângulo na foto: só essa parte das candidatas marcadas será aceita.", 8000)
+
+    def _wm_partial_done(self, drawn: tuple[float, float, float, float]) -> None:
+        """Retângulo desenhado (relativo): aceita só a interseção com cada candidata marcada."""
+        idx, self._wm_partial = self._wm_partial or [], None
+        self.wm_panel.set_partial_mode(False)
+        dx, dy, dw, dh = drawn
+        feitas = 0
+        for i in idx:
+            if i >= len(self._wm_cands):
+                continue
+            cx, cy, cw, ch = self._wm_cands[i].rect()
+            x0, y0 = max(cx, dx), max(cy, dy)
+            x1, y1 = min(cx + cw, dx + dw), min(cy + ch, dy + dh)
+            if x1 - x0 < 1e-4 or y1 - y0 < 1e-4:
+                continue
+            r = (x0, y0, x1 - x0, y1 - y0)
+            self._wm_add_mask(inpaint.rect_mask(self.image.shape, *r), brush=False, rect=r)
+            feitas += 1
+        self._sync_wm_tool()
+        self.statusBar().showMessage(
+            f"Parte aceita em {feitas} candidata(s)." if feitas else
+            "O retângulo não cruzou nenhuma candidata marcada.", 5000)
 
     def _wm_clear(self) -> None:
         if self._wm_mask is not None:
@@ -1197,12 +1301,13 @@ class MainWindow(QMainWindow):
                     "Não achei nenhuma região que se destaque como marca d'água (a foto pode ter muita "
                     "textura ou a marca ser grande/colorida). Marque à mão com o pincel ou o retângulo." + nota)
                 return
-            for c in res.itens:
-                x, y, w, h = c.rect()
-                self._wm_add_mask(inpaint.rect_mask(img.shape, x, y, w, h), brush=False, rect=c.rect())
-            lugares = "; ".join(c.lugar for c in res.itens)
+            self._wm_cands, self._wm_partial = list(res.itens), None
+            self.wm_panel.set_partial_mode(False)
+            self._wm_sync_cands()
+            self._wm_show()
             self.statusBar().showMessage(
-                f"{len(res.itens)} região(ões) marcada(s): {lugares}. Confira — Ctrl+Z tira uma por vez.", 9000)
+                f"{len(res.itens)} candidata(s) encontrada(s): confira, marque as que são marca d'água e "
+                "clique em \"Aceitar as marcadas\" (ou aceite só uma parte).", 12000)
             if nota:
                 QMessageBox.information(self, APP_NAME, nota.strip())
 

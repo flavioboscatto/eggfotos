@@ -150,3 +150,55 @@ def test_marca_em_mosaico_e_detectada_como_repetida():
     a = (ov / 255.0 * 0.4)[..., None]
     wm = (img * (1 - a) + 255 * a).astype(np.uint8)
     assert suggest.find_candidates(wm).repetida
+
+
+# ------------------------------------------------------- logotipos e tipos
+
+def _logo_opaco(img):
+    o = img.copy()
+    cv2.circle(o, (110, 500), 55, (20, 20, 20), -1, cv2.LINE_AA)
+    cv2.circle(o, (110, 500), 42, (240, 240, 240), 3, cv2.LINE_AA)
+    cv2.putText(o, "EF", (80, 520), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (240, 240, 240), 3, cv2.LINE_AA)
+    return o
+
+
+def _logo_translucido(img):
+    ov = np.zeros((H, W), np.uint8)
+    cv2.rectangle(ov, (640, 40), (860, 130), 255, -1)
+    cv2.putText(ov, "FOTO", (660, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 0, 4, cv2.LINE_AA)
+    a = (ov / 255.0 * 0.4)[..., None]
+    return (img * (1 - a) + 255 * a).astype(np.uint8)
+
+
+def test_acha_logotipo_opaco_no_canto():
+    res = suggest.find_candidates(_logo_opaco(_scene("sky")))
+    assert len(res.itens) == 1
+    c = res.itens[0]
+    assert c.tipo == "logotipo" and "inferior esquerdo" in c.lugar
+    assert c.x < 0.1 and c.y > 0.7 and c.w < 0.25                  # cobre o selo (círculo em ~(110, 500))
+
+
+def test_acha_logotipo_translucido():
+    res = suggest.find_candidates(_logo_translucido(_scene("sky")))
+    assert len(res.itens) == 1
+    c = res.itens[0]
+    assert c.polaridade == "clara" and "superior direito" in c.lugar
+    assert _iou(c, (640 / W, 40 / H, 220 / W, 90 / H)) > 0.5
+
+
+def test_texto_e_logotipos_juntos_vem_separados_e_com_tipo():
+    wm, _ = _mark(_logo_translucido(_logo_opaco(_scene("sky"))))
+    res = suggest.find_candidates(wm)
+    tipos = sorted(c.tipo for c in res.itens)
+    assert tipos == ["logotipo", "logotipo", "texto"]
+    texto = next(c for c in res.itens if c.tipo == "texto")
+    assert "inferior direito" in texto.lugar and texto.rotulo().startswith("Texto")
+
+
+def test_logotipo_em_foto_texturada_nao_inventa():
+    assert suggest.find_candidates(_logo_opaco(_scene("tex"))).itens == []      # prefere calar a chutar
+
+
+def test_ate_max_n_candidatas():
+    wm, _ = _mark(_logo_translucido(_logo_opaco(_scene("sky"))))
+    assert len(suggest.find_candidates(wm, max_n=2).itens) <= 2

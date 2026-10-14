@@ -822,6 +822,10 @@ class WatermarkPanel(QWidget):
     snapUndoRequested = pyqtSignal()
     findRequested = pyqtSignal()
     suggestRequested = pyqtSignal()
+    candidatesChanged = pyqtSignal()
+    acceptRequested = pyqtSignal(list)      # índices das candidatas marcadas
+    partialRequested = pyqtSignal(list)
+    discardRequested = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -842,6 +846,24 @@ class WatermarkPanel(QWidget):
         for w in (self.btn_find, self.btn_suggest, self.lbl_sugestao):
             f0.addWidget(w)
         lay.addWidget(g0)
+
+        self.g_cand = QGroupBox("Candidatas encontradas")
+        fc = QVBoxLayout(self.g_cand)
+        fc.addWidget(_hint("Marque as que são marca d'água e aceite. Cada candidata aparece numerada na foto "
+                           "(laranja = marcada)."))
+        self.list_cand = QListWidget()
+        self.list_cand.setMaximumHeight(130)
+        fc.addWidget(self.list_cand)
+        self.btn_cand_accept = QPushButton("Aceitar as marcadas")
+        self.btn_cand_accept.setObjectName("primary")
+        self.btn_cand_partial = QPushButton("Aceitar só uma parte…")
+        self.btn_cand_partial.setToolTip("Depois de clicar, arraste um retângulo na foto: das candidatas "
+                                         "marcadas, só o que estiver dentro dele é aceito.")
+        self.btn_cand_discard = QPushButton("Descartar as marcadas")
+        for b in (self.btn_cand_accept, self.btn_cand_partial, self.btn_cand_discard):
+            fc.addWidget(b)
+        self.g_cand.setVisible(False)
+        lay.addWidget(self.g_cand)
 
         g1 = QGroupBox("1. Marque a área a apagar")
         f1 = QVBoxLayout(g1)
@@ -974,6 +996,11 @@ class WatermarkPanel(QWidget):
         self.btn_snap.clicked.connect(lambda: self.snapRequested.emit(
             {"polaridade": self.cmb_pol.currentData(), "sensibilidade": self.sl_sens.value()}))
         self.btn_snap_undo.clicked.connect(self.snapUndoRequested)
+        self.list_cand.itemChanged.connect(lambda _i: self.candidatesChanged.emit())
+        self.list_cand.currentRowChanged.connect(lambda _r: self.candidatesChanged.emit())
+        self.btn_cand_accept.clicked.connect(lambda: self.acceptRequested.emit(self.checked_candidates()))
+        self.btn_cand_partial.clicked.connect(lambda: self.partialRequested.emit(self.checked_candidates()))
+        self.btn_cand_discard.clicked.connect(lambda: self.discardRequested.emit(self.checked_candidates()))
         self.btn_find.clicked.connect(self.findRequested)
         self.btn_suggest.clicked.connect(self.suggestRequested)
         self.btn_learn.clicked.connect(self.learnRequested)
@@ -1106,6 +1133,30 @@ class WatermarkPanel(QWidget):
         self.btn_save_tpl.setEnabled(count > 0)
         self.btn_snap.setEnabled(count > 0)
         self.btn_suggest.setEnabled(count > 0)
+
+    # ------------------------------------------------ candidatas
+    def set_candidates(self, rotulos: list[str] | None) -> None:
+        """Lista as candidatas (todas marcadas); None ou vazio esconde o grupo."""
+        self.list_cand.blockSignals(True)
+        self.list_cand.clear()
+        for i, texto in enumerate(rotulos or []):
+            it = QListWidgetItem(f"{i + 1} · {texto}")
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.list_cand.addItem(it)
+        self.list_cand.blockSignals(False)
+        self.g_cand.setVisible(bool(rotulos))
+
+    def checked_candidates(self) -> list[int]:
+        return [i for i in range(self.list_cand.count())
+                if self.list_cand.item(i).checkState() == Qt.CheckState.Checked]
+
+    def current_candidate(self) -> int:
+        return self.list_cand.currentRow()
+
+    def set_partial_mode(self, on: bool) -> None:
+        self.btn_cand_partial.setText("Arraste o retângulo na foto…" if on else "Aceitar só uma parte…")
+        self.btn_cand_partial.setEnabled(not on)
 
     def apply_suggestion(self, sug) -> None:
         """Preenche os controles com a sugestão da pré-análise e mostra o porquê."""

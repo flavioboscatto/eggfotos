@@ -64,8 +64,10 @@ eggfotos/
                            `objetos_modelo` em remover_fundo/desfocar_fundo (background.matte_for)
     suggest.py             pré-análise SEM IA da marca d'água: suggest_settings(img, máscara) mede textura, grão,
                            espessura dos traços, tamanho e rostos por perto → controles sugeridos + motivos;
-                           find_candidates(img) acha regiões de traços finos (top-hat/black-hat, preferência pelas
-                           bordas) e avisa de marca em mosaico (autocorrelação). Palpite: o usuário confere
+                           find_candidates(img) acha TEXTOS (traços finos, top-hat/black-hat) e LOGOTIPOS (formas sólidas
+                           isoladas, núcleos grandes; Candidate.tipo), preferindo as bordas, e avisa de marca em
+                           mosaico (autocorrelação). Palpite: a UI lista as candidatas numeradas (checkbox) e o
+                           usuário aceita, aceita só uma parte (retângulo ∩ candidata) ou descarta
     faces.py               YuNet (cv2.FaceDetectorYN): detect_faces (caixas relativas + score) →
                            blur_boxes (sensibilidade, margem, tipo); blur_faces = as duas
     geometry.py            crop, crop_relative, crop_to_ratio, rotate, straighten, resize, downscale

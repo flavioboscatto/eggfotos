@@ -5,6 +5,7 @@ import time
 import cv2
 import numpy as np
 import pytest
+from PyQt6.QtCore import Qt
 
 pytest.importorskip("PyQt6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -138,19 +139,107 @@ def _foto_com_marca():
     return (base * (1 - a) + 255 * a).astype(np.uint8)
 
 
-def test_procurar_marca_marca_as_regioes_e_desfaz_uma_por_vez(janela):
-    w = janela
+def _com_marca(w):
     img = _foto_com_marca()
     w.history.reset(img); w._saved_uid = w.history.current_uid
     w._set_working_image(img, True)
     w.tabs.setCurrentIndex(TAB_MARCA)
+
+
+def test_procurar_lista_candidatas_sem_marcar_nada(janela):
+    w = janela
+    _com_marca(w)
     w.wm_panel.btn_find.click(); w.esperar()
-    assert w._wm_mask is not None and w._wm_count() >= 1
+    assert len(w._wm_cands) >= 1 and w.wm_panel.list_cand.count() == len(w._wm_cands)
+    assert not w.wm_panel.g_cand.isHidden()
+    assert w._wm_count() == 0 and not w.wm_panel.btn_apply.isEnabled()   # só aceitando é que vira marcação
+    assert w.wm_panel.checked_candidates() == list(range(len(w._wm_cands)))
+
+
+def test_aceitar_marcadas_vira_marcacao_e_desfaz_traz_a_candidata(janela):
+    w = janela
+    _com_marca(w)
+    w.wm_panel.btn_find.click(); w.esperar()
+    n = len(w._wm_cands)
+    w.wm_panel.btn_cand_accept.click()
+    assert w._wm_count() == n and not w._wm_cands and w.wm_panel.g_cand.isHidden()
     ys, xs = np.where(w._wm_mask > 0)
     assert xs.mean() > 600 and ys.mean() > 480             # canto inferior direito
-    n = w._wm_count()
+    assert w.wm_panel.btn_apply.isEnabled()
     w.undo()
-    assert w._wm_count() == n - 1
+    assert w._wm_count() == n - 1 and len(w._wm_cands) == 1   # a candidata voltou para a lista
+
+
+def test_desmarcar_e_aceitar_so_as_marcadas(janela):
+    w = janela
+    _com_marca(w)
+    w._wm_cands = [_cand(0.05, 0.05, 0.2, 0.1), _cand(0.6, 0.8, 0.3, 0.1)]
+    w._wm_sync_cands()
+    w.wm_panel.list_cand.item(0).setCheckState(Qt.CheckState.Unchecked)
+    w.wm_panel.btn_cand_accept.click()
+    assert w._wm_count() == 1 and len(w._wm_cands) == 1
+    assert w._wm_mask[:60, :90].max() == 0 and w._wm_mask[490:540, 560:860].max() == 255
+
+
+def test_descartar_remove_da_lista_sem_marcar(janela):
+    w = janela
+    _com_marca(w)
+    w._wm_cands = [_cand(0.05, 0.05, 0.2, 0.1), _cand(0.6, 0.8, 0.3, 0.1)]
+    w._wm_sync_cands()
+    w.wm_panel.list_cand.item(1).setCheckState(Qt.CheckState.Unchecked)
+    w.wm_panel.btn_cand_discard.click()
+    assert w._wm_count() == 0 and len(w._wm_cands) == 1 and w._wm_cands[0].x == 0.6   # descartou só a marcada (a 1)
+    w.wm_panel.btn_cand_discard.click()
+    assert not w._wm_cands and w.wm_panel.g_cand.isHidden()
+
+
+def test_aceitar_so_uma_parte(janela):
+    w = janela
+    _com_marca(w)
+    w._wm_cands = [_cand(0.5, 0.8, 0.4, 0.1)]            # x 450–810, y 480–540 (foto 900×600)
+    w._wm_sync_cands()
+    w.wm_panel.btn_cand_partial.click()
+    assert w._wm_partial == [0] and not w.wm_panel.btn_cand_partial.isEnabled()
+    w._apply_region_blur((600, 470, 100, 100))            # retângulo cobre só um pedaço
+    assert w._wm_partial is None and w.wm_panel.btn_cand_partial.isEnabled()
+    assert w._wm_count() == 1 and len(w._wm_cands) == 1   # a candidata continua listada
+    ys, xs = np.where(w._wm_mask > 0)
+    assert xs.min() == 600 and xs.max() == 699 and ys.min() == 480 and ys.max() == 539
+
+
+def test_parte_fora_da_candidata_nao_marca_nada(janela):
+    w = janela
+    _com_marca(w)
+    w._wm_cands = [_cand(0.5, 0.8, 0.4, 0.1)]
+    w._wm_sync_cands()
+    w.wm_panel.btn_cand_partial.click()
+    w._apply_region_blur((10, 10, 50, 50))
+    assert w._wm_count() == 0 and w._wm_partial is None
+
+
+def test_mexer_na_ferramenta_cancela_aceitar_parte(janela):
+    w = janela
+    _com_marca(w)
+    w._wm_cands = [_cand(0.5, 0.8, 0.4, 0.1)]
+    w._wm_sync_cands()
+    w.wm_panel.btn_cand_partial.click()
+    w.wm_panel.grp_tool.button(0).setChecked(False)
+    w.wm_panel.grp_tool.button(1).setChecked(True)
+    assert w._wm_partial is None
+
+
+def test_nova_foto_limpa_candidatas(janela):
+    w = janela
+    _com_marca(w)
+    w.wm_panel.btn_find.click(); w.esperar()
+    assert w._wm_cands
+    w.commit(w.image.copy(), "teste", None)
+    assert not w._wm_cands and w.wm_panel.g_cand.isHidden()
+
+
+def _cand(x, y, w, h):
+    from eggfotos.core.suggest import Candidate
+    return Candidate(x, y, w, h, 0.5, "clara", "canto", "texto")
 
 
 def test_sugerir_ajustes_preenche_os_controles(janela):
