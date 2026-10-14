@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import APP_NAME, ICON_PATH, __version__
-from ..core import background, faces, geometry, inpaint, objects, segment, suggest, watermark
+from ..core import autoadjust, background, faces, geometry, inpaint, objects, segment, suggest, watermark
 from ..core.blur import blur_with_mask
 from ..core.history import History
 from ..errors import friendly_error
@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
         self.adjust_panel.previewChanged.connect(self._preview_adjust)
         self.adjust_panel.applyRequested.connect(self._apply_adjust)
         self.adjust_panel.cancelRequested.connect(self._cancel_preview)
+        self.adjust_panel.autoRequested.connect(self._auto_adjust)
 
         self.filters_panel.previewChanged.connect(self._preview_filter)
         self.filters_panel.applyRequested.connect(self._apply_filter)
@@ -434,6 +435,22 @@ class MainWindow(QMainWindow):
             self.canvas.set_tool(TOOL_NAV)
 
     # ============================================================= ajustes
+    def _auto_adjust(self) -> None:
+        """Varinha mágica: mede a foto (sem IA) e põe a sugestão nos sliders de Ajustes."""
+        if self.image is None:
+            return
+        img, uid = self.image, self.history.current_uid
+
+        def done(sug):
+            if self.history.current_uid != uid:
+                return
+            self.adjust_panel.apply_auto(sug)
+            self.statusBar().showMessage(
+                "Sugestão aplicada na prévia — ajuste os sliders ou a intensidade e clique em Aplicar."
+                if not sug.is_empty() else "A foto já está equilibrada.", 6000)
+
+        self._run_task("Analisando a foto…", lambda: autoadjust.suggest_adjustments(img), done)
+
     def _preview_adjust(self, values: dict) -> None:
         self._preview_step({"op": "ajustes", **values})
 

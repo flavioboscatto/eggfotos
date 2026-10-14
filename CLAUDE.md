@@ -34,6 +34,10 @@ eggfotos/
     frames.py              molduras (15): registro FRAMES + apply_frame(img, nome, espessura, cor, cor_padrao, texto);
                            papel/galeria, cinema/filme (rolo 35 mm, negativo, slide, Super 8) e eletrônicos (VHS, TV);
                            tamanhos relativos ao menor lado; aumentam a foto (exceto VHS); saída RGB opaca
+    autoadjust.py          "varinha mágica" dos Ajustes, SEM IA: suggest_adjustments(img) mede mediana (exposição),
+                           faixa p1–p99 (contraste), % escuro/estourado (sombras/realces), croma (saturação),
+                           dominante só em pixels quase neutros (temperatura), laplaciano (nitidez) e ruído
+                           (Immerkaer, em pixels reais) → AutoSuggestion(values, motivos); .scaled(intensidade)
     filters.py             registro FILTERS (28, incl. 10 vintage); apply_filter(img, nome, intensidade)
                            auxiliares vintage: _grain, _curves, _duotone, _dust
     background.py          remover fundo: compute_matte (rembg/ONNX) → apply_matte (refino,
@@ -138,6 +142,9 @@ tests/                     pytest do core e do pipeline
   só pessoas/veículos/barcos/animais/aviões passam pelo SAM. Fotos fora da distribuição (rosto em close, macro)
   dão classes erradas. "Manter" vazio = parte da detecção principal (rembg) e subtrai o "Apagar".
   Nova categoria = uma `Category(chave, rótulo, classes ADE20K)` em `core/objects.py` (o teste proíbe classe repetida).
+- Varinha mágica: conservadora de propósito (cena noturna não "vira dia"; dominante de cor só em tons neutros;
+  branco estourado só é atenuado). Limiares calibrados com fotos sintéticas e 3 fotos de exemplo; ajustar em
+  `autoadjust.py` se errar nas suas. Não entra em lote: o resultado é o passo "Ajustes" normal.
 - Pré-análise da marca d'água é heurística: limiares calibrados em fundos sintéticos (liso/texturado/grão);
   recalibrar com fotos reais se a sugestão errar muito (`suggest.py`: `nivel`, `grande`, grão 0,9/3,0).
 - Perfis da Marca d'água: valores iniciais, não regras; mexer em qualquer controle volta para "Personalizado".

@@ -43,7 +43,7 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Área | Recursos |
 |---|---|
 | Arquivo | Abrir (JPG, PNG, WEBP, BMP, TIFF), arrastar e soltar, Salvar / Salvar como, qualidade JPG/WEBP, mantém EXIF e perfil de cor, corrige a orientação da câmera |
-| Ajustes | Exposição, brilho, contraste, realces, sombras, saturação, temperatura, nitidez, **remover granulação**, com prévia ao vivo |
+| Ajustes | **Varinha mágica** (sugere os ajustes medindo a foto, sem IA, com intensidade regulável), exposição, brilho, contraste, realces, sombras, saturação, temperatura, nitidez, **remover granulação**, com prévia ao vivo |
 | Filtros | 28 filtros (inclui 10 vintage/foto antiga: Foto antiga, Sépia envelhecido, Daguerreótipo, Polaroid, Anos 70, Kodachrome, Cross process, Filme P&B clássico, Filme 8mm, Papel amarelado) com **miniatura da própria foto**, intensidade 0–100% e prévia |
 | Recortar | Livre ou proporção fixa (1:1, 4:3, 3:2, 16:9…), mover a seleção, Enter aplica |
 | Girar | 90° esquerda/direita, espelhar, endireitar (−45° a +45° com recorte automático), redimensionar |

@@ -64,10 +64,32 @@ class AdjustPanel(QWidget):
     previewChanged = pyqtSignal(dict)
     applyRequested = pyqtSignal(dict)
     cancelRequested = pyqtSignal()
+    autoRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
+
+        self.btn_auto = QPushButton("Varinha mágica — sugerir ajustes")
+        self.btn_auto.setToolTip("Mede a foto (luz, contraste, cor, nitidez, ruído) e preenche os controles "
+                                 "com uma sugestão. Sem IA; você refina e aplica.")
+        lay.addWidget(self.btn_auto)
+        self.box_auto = QWidget()
+        ba = QVBoxLayout(self.box_auto)
+        ba.setContentsMargins(0, 0, 0, 0)
+        row_i, self.sl_auto = _slider_row(0, 150, 100, "%")
+        self.sl_auto.setToolTip("Quanto da sugestão usar: 100% = como sugerido, 50% = metade, 150% = mais forte.")
+        form_i = QFormLayout()
+        form_i.addRow("Intensidade da sugestão", row_i)
+        ba.addLayout(form_i)
+        self.lbl_auto = QLabel("")
+        self.lbl_auto.setObjectName("hint")
+        self.lbl_auto.setWordWrap(True)
+        ba.addWidget(self.lbl_auto)
+        self.box_auto.setVisible(False)
+        lay.addWidget(self.box_auto)
+        self._auto = None
+
         grid = QGridLayout()
         self._sliders: dict[str, QSlider] = {}
         self._values: dict[str, QLabel] = {}
@@ -101,13 +123,41 @@ class AdjustPanel(QWidget):
         self._timer = debounce(self, 50, lambda: self.previewChanged.emit(self.values()))
         self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
         self.btn_reset.clicked.connect(self._on_reset)
+        self.btn_auto.clicked.connect(self.autoRequested)
+        self.sl_auto.valueChanged.connect(self._on_auto_intensity)
 
     def values(self) -> dict[str, int]:
         return {k: s.value() for k, s in self._sliders.items()}
 
+    def set_values(self, vals: dict[str, int]) -> None:
+        """Põe os valores nos sliders e dispara uma única prévia."""
+        for k, s in self._sliders.items():
+            s.blockSignals(True)
+            s.setValue(int(vals.get(k, 0)))
+            s.blockSignals(False)
+            val = s.value()
+            self._values[k].setText(f"{val:+d}" if val and adjustment_range(k)[0] < 0 else str(val))
+        self._timer.start()
+
+    def apply_auto(self, sug) -> None:
+        """Mostra a sugestão da varinha mágica (valores + motivos) com intensidade 100%."""
+        self._auto = sug
+        self.sl_auto.blockSignals(True)
+        self.sl_auto.setValue(100)
+        self.sl_auto.blockSignals(False)
+        self.lbl_auto.setText("\n".join("• " + m for m in sug.motivos))
+        self.box_auto.setVisible(True)
+        self.set_values(sug.scaled(100))
+
+    def _on_auto_intensity(self, v: int) -> None:
+        if self._auto is not None:
+            self.set_values(self._auto.scaled(v))
+
     def reset(self) -> None:
         """Zera os controles sem emitir prévia."""
         self._timer.stop()
+        self._auto = None
+        self.box_auto.setVisible(False)
         for k, val in neutral_params().items():
             s = self._sliders[k]
             s.blockSignals(True)
