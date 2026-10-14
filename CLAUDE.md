@@ -79,15 +79,19 @@ tests/                     pytest do core e do pipeline
    ficar igual ao resultado em resolução total.
 4. **Coordenadas relativas (0–1) nos steps** de recorte/região, para a mesma receita
    servir em fotos de tamanhos diferentes. Na cena do canvas, coordenadas = pixels reais.
-5. **Histórico:** `MainWindow.commit(img, rótulo, step)`; `step=None` para edições
+5. **Desfazer em dois níveis:** Ctrl+Z desfaz primeiro as MARCAÇÕES em andamento da aba atual, uma por vez
+   (`_mark_undo`: traço/retângulo/clique/aperto/limpar na Marca d'água; cliques do modo Fundo em `_sam_points`),
+   e só quando não há mais marcação mexe no histórico da foto. Desfazer uma remoção já aplicada devolve as
+   marcações (`_mark_applied`). Marcações são guardadas em bits (`np.packbits`), máx. 60.
+6. **Histórico:** `MainWindow.commit(img, rótulo, step)`; `step=None` para edições
    manuais não reproduzíveis (ex.: pincel).
-6. **Threads:** o resultado de uma tarefa só entra no histórico se a foto não mudou (`uid`); só arrays e objetos Python atravessam threads; `QPixmap` apenas na thread
+7. **Threads:** o resultado de uma tarefa só entra no histórico se a foto não mudou (`uid`); só arrays e objetos Python atravessam threads; `QPixmap` apenas na thread
    principal. O `core` e o `pipeline` não podem importar PyQt6 (o lote roda em processos).
-7. **Originais nunca são sobrescritos pelo lote** (validado em `runner.validate_job`).
-8. Erros por foto no lote vão para o log CSV; o lote continua.
-9. **Filtros com aleatoriedade (grão, poeira) usam semente fixa e tamanho relativo**:
+8. **Originais nunca são sobrescritos pelo lote** (validado em `runner.validate_job`).
+9. Erros por foto no lote vão para o log CSV; o lote continua.
+10. **Filtros com aleatoriedade (grão, poeira) usam semente fixa e tamanho relativo**:
    mesma foto → mesmo resultado, e a prévia reduzida fica igual ao resultado final.
-10. **Operações pesadas (IA) em duas etapas**: parte cara cacheável (`compute_matte`) separada
+11. **Operações pesadas (IA) em duas etapas**: parte cara cacheável (`compute_matte`) separada
     da parte rápida e ajustável (`apply_matte`). A UI roda a cara em `TaskWorker` e refina ao vivo.
     O `core` nunca baixa modelo sozinho: `compute_matte` levanta `ModelNotDownloadedError`;
     só `download_model` baixa, e a UI pede confirmação antes.

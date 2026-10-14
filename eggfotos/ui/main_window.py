@@ -60,6 +60,10 @@ class MainWindow(QMainWindow):
         self._sam_mask: np.ndarray | None = None
         self._click_busy = False
         self._wm_strokes = 0
+        self._mark_undo: list[tuple] = []         # desfazer das MARCAÇÕES (traço/retângulo/clique/ajuste)
+        self._mark_redo: list[tuple] = []
+        self._mark_applied: dict[int, tuple] = {}  # uid do estado criado por "Remover" → marcação de antes
+        self._bg_redo_points: list[tuple[float, float, int]] = []  # cliques desfeitos (modo Fundo)
         self._wm_loose: np.ndarray | None = None  # marcação solta, guardada antes do "apertar aos traços"
         self._wm_template: str | None = None      # nome do modelo salvo para a marcação atual
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
@@ -260,10 +264,7 @@ class MainWindow(QMainWindow):
             a.setEnabled(has)
         self.tabs.setEnabled(has)
         self.btn_compare.setEnabled(has and self.history.can_undo())
-        self.act_undo.setEnabled(self.history.can_undo())
-        self.act_redo.setEnabled(self.history.can_redo())
-        self.act_undo.setText(f"Desfazer {self.history.undo_label()}".strip())
-        self.act_redo.setText(f"Refazer {self.history.redo_label()}".strip())
+        self._refresh_undo_actions()
         name = self.path.name if self.path else ""
         mod = " •" if self._is_modified() else ""
         self.setWindowTitle(f"{name}{mod} — {APP_NAME}" if name else APP_NAME)
@@ -367,6 +368,7 @@ class MainWindow(QMainWindow):
             self.canvas.set_image(self.image)
         self._cancel_preview()
         self._sam_reset()
+        self._refresh_undo_actions()
         self.adjust_panel.reset()
         self.filters_panel.reset()
         self.crop_panel.reset_angle()
@@ -489,8 +491,8 @@ class MainWindow(QMainWindow):
         if self.tabs.currentIndex() == TAB_WATERMARK:
             H, W = self.image.shape[:2]
             x, y, w, h = rect
-            self._wm_rects.append((x / W, y / H, w / W, h / H))
-            self._wm_add_mask(inpaint.rect_mask(self.image.shape, x / W, y / H, w / W, h / H), brush=False)
+            self._wm_add_mask(inpaint.rect_mask(self.image.shape, x / W, y / H, w / W, h / H),
+                              brush=False, rect=(x / W, y / H, w / W, h / H))
             return
         H, W = self.image.shape[:2]
         x, y, w, h = rect
@@ -732,6 +734,7 @@ class MainWindow(QMainWindow):
     def _sam_reset(self) -> None:
         """Sai do modo de cliques e limpa marcadores/seleção temporária."""
         self._sam_points, self._sam_pixels, self._sam_mask = [], [], None
+        self._bg_redo_points = []
         self.canvas.clear_point_markers()
         self.background_panel.set_click_mode(False)
         if self.tabs.currentIndex() == TAB_BACKGROUND and self.canvas.tool() == TOOL_POINT:
@@ -781,6 +784,8 @@ class MainWindow(QMainWindow):
         if tab == TAB_BACKGROUND:
             self._sam_points.append((x / W, y / H, 1 if positive else 0))
             self._sam_pixels.append((x, y, positive))
+            self._bg_redo_points = []
+            self._refresh_undo_actions()
             self._ensure_sam_models(self._bg_click_run)
         elif tab == TAB_WATERMARK:
             def go():
@@ -801,7 +806,8 @@ class MainWindow(QMainWindow):
         pts = list(self._sam_points)
 
         def done(mask):
-            if pts != self._sam_points:  # chegou outro clique enquanto calculava
+            if pts != self._sam_points:  # os cliques mudaram enquanto calculava: refaz com os atuais
+                self._bg_click_refresh()
                 return
             self._sam_mask = mask
             self.canvas.set_point_markers(self._sam_pixels)
@@ -809,7 +815,17 @@ class MainWindow(QMainWindow):
 
         self._sam_segment(pts, done)
 
+    def _bg_click_refresh(self) -> None:
+        """Depois de desfazer/refazer um clique: recalcula a seleção com os cliques restantes."""
+        self.canvas.set_point_markers(self._sam_pixels)
+        if self._sam_points:
+            self._bg_click_run()
+        else:
+            self._sam_mask = None
+            self._cancel_preview()
+
     def _bg_click_clear(self) -> None:
+        self._bg_redo_points = []
         self._sam_points, self._sam_pixels, self._sam_mask = [], [], None
         self.canvas.clear_point_markers()
         self._cancel_preview()
@@ -830,11 +846,13 @@ class MainWindow(QMainWindow):
         if positive:
             self._wm_add_mask(mask, brush=True)
         elif self._wm_mask is not None:  # Alt+clique: tira o objeto da marcação
+            self._wm_checkpoint()
             self._wm_mask = np.where(mask > 0, 0, self._wm_mask).astype(np.uint8)
             self._wm_show()
 
     # ======================================================== marca d'água
     def _wm_reset(self) -> None:
+        self._mark_undo, self._mark_redo = [], []
         self._wm_mask = None
         self._wm_rects = []
         self._wm_brush = False
@@ -861,7 +879,106 @@ class MainWindow(QMainWindow):
             self.canvas.region_shape = "retangulo"
             self.canvas.set_tool(TOOL_REGION)
 
-    def _wm_add_mask(self, mask: np.ndarray, brush: bool) -> None:
+    # --- desfazer/refazer das marcações (passo a passo) -------------------------
+    def _wm_snapshot(self) -> tuple:
+        def pack(m):
+            return None if m is None else (np.packbits(m > 0), m.shape)   # 1 bit/pixel: barato
+        return (pack(self._wm_mask), list(self._wm_rects), self._wm_strokes, self._wm_brush,
+                pack(self._wm_loose))
+
+    def _wm_restore(self, snap: tuple) -> None:
+        def unpack(p):
+            if p is None:
+                return None
+            bits, shape = p
+            n = shape[0] * shape[1]
+            return (np.unpackbits(bits)[:n].reshape(shape) * 255).astype(np.uint8)
+        mask, rects, strokes, brush, loose = snap
+        self._wm_mask, self._wm_loose = unpack(mask), unpack(loose)
+        self._wm_rects, self._wm_strokes, self._wm_brush = list(rects), strokes, brush
+        self._wm_template = None
+        self.wm_panel.set_template_name(None)
+        self.wm_panel.set_snap_undo(self._wm_loose is not None)
+        self.wm_panel.set_marked(self._wm_count())
+        if self._wm_mask is None or not self._wm_mask.any():
+            self._cancel_preview()
+        else:
+            self._wm_show()
+
+    def _wm_checkpoint(self) -> None:
+        """Guarda o estado ANTES de mudar a marcação (chame antes de cada alteração)."""
+        self._mark_undo.append(self._wm_snapshot())
+        del self._mark_undo[:-60]
+        self._mark_redo.clear()
+        self._refresh_undo_actions()
+
+    def _marks_can_undo(self) -> bool:
+        tab = self.tabs.currentIndex()
+        return (tab == TAB_WATERMARK and bool(self._mark_undo)) or \
+               (tab == TAB_BACKGROUND and bool(self._sam_points))
+
+    def _marks_can_redo(self) -> bool:
+        tab = self.tabs.currentIndex()
+        return (tab == TAB_WATERMARK and bool(self._mark_redo)) or \
+               (tab == TAB_BACKGROUND and bool(self._bg_redo_points))
+
+    def _marks_undo(self) -> bool:
+        """Desfaz UMA marcação da aba atual. True se havia o que desfazer."""
+        tab = self.tabs.currentIndex()
+        if tab == TAB_WATERMARK and self._mark_undo:
+            self._mark_redo.append(self._wm_snapshot())
+            self._wm_restore(self._mark_undo.pop())
+            self.statusBar().showMessage("Marcação desfeita.", 2500)
+        elif tab == TAB_BACKGROUND and self._sam_points:
+            self._bg_redo_points.append(self._sam_points.pop())
+            self._sam_pixels.pop()
+            self._bg_click_refresh()
+            self.statusBar().showMessage("Clique desfeito.", 2500)
+        else:
+            return False
+        self._refresh_undo_actions()
+        return True
+
+    def _marks_redo(self) -> bool:
+        tab = self.tabs.currentIndex()
+        if tab == TAB_WATERMARK and self._mark_redo:
+            self._mark_undo.append(self._wm_snapshot())
+            self._wm_restore(self._mark_redo.pop())
+            self.statusBar().showMessage("Marcação refeita.", 2500)
+        elif tab == TAB_BACKGROUND and self._bg_redo_points:
+            x, y, label = self._bg_redo_points.pop()
+            H, W = self.image.shape[:2]
+            self._sam_points.append((x, y, label))
+            self._sam_pixels.append((x * W, y * H, label == 1))
+            self._bg_click_refresh()
+            self.statusBar().showMessage("Clique refeito.", 2500)
+        else:
+            return False
+        self._refresh_undo_actions()
+        return True
+
+    def _refresh_undo_actions(self) -> None:
+        """Desfazer/Refazer valem para a marcação em andamento antes de valerem para o histórico."""
+        if self.image is None:
+            return
+        if self._marks_can_undo():
+            self.act_undo.setEnabled(True)
+            self.act_undo.setText("Desfazer última marcação")
+        else:
+            self.act_undo.setEnabled(self.history.can_undo())
+            self.act_undo.setText(f"Desfazer {self.history.undo_label()}".strip())
+        if self._marks_can_redo():
+            self.act_redo.setEnabled(True)
+            self.act_redo.setText("Refazer marcação")
+        else:
+            self.act_redo.setEnabled(self.history.can_redo())
+            self.act_redo.setText(f"Refazer {self.history.redo_label()}".strip())
+
+    def _wm_add_mask(self, mask: np.ndarray, brush: bool,
+                     rect: tuple[float, float, float, float] | None = None) -> None:
+        self._wm_checkpoint()
+        if rect is not None:
+            self._wm_rects.append(rect)
         self._wm_mask = mask.copy() if self._wm_mask is None else np.maximum(self._wm_mask, mask)
         if brush:
             self._wm_brush = True
@@ -880,8 +997,15 @@ class MainWindow(QMainWindow):
         self._show_mask_overlay(self._wm_mask, (255, 40, 40))
 
     def _wm_clear(self) -> None:
-        self._wm_reset()
+        if self._wm_mask is not None:
+            self._wm_checkpoint()          # "Limpar" também pode ser desfeito
+            undo, redo = self._mark_undo, self._mark_redo
+            self._wm_reset()
+            self._mark_undo, self._mark_redo = undo, redo
+        else:
+            self._wm_reset()
         self._cancel_preview()
+        self._refresh_undo_actions()
 
     def _wm_snap(self, opts: dict) -> None:
         if self._wm_mask is None or self.image is None:
@@ -895,6 +1019,7 @@ class MainWindow(QMainWindow):
                     "Não encontrei traços que se destaquem do fundo nessa área. Tente aumentar a "
                     "sensibilidade, escolher a cor da marca (clara/escura) ou marcar uma área menor.")
                 return
+            self._wm_checkpoint()
             self._wm_loose = loose
             self._wm_mask = snapped
             self._wm_template = None
@@ -910,6 +1035,7 @@ class MainWindow(QMainWindow):
     def _wm_snap_undo(self) -> None:
         if self._wm_loose is None:
             return
+        self._wm_checkpoint()
         self._wm_mask, self._wm_loose = self._wm_loose, None
         self._wm_template = None
         self.wm_panel.set_template_name(None)
@@ -993,22 +1119,42 @@ class MainWindow(QMainWindow):
         elif not self._wm_brush and len(self._wm_rects) == 1:
             x, y, w, h = self._wm_rects[0]
             step = get_operation("remover_marca_regiao").new_step(x=x, y=y, w=w, h=h, **values)
+        snap = self._wm_snapshot()  # se a remoção ficar ruim, Ctrl+Z devolve as marcações para ajustar
+
+        def done(out):
+            self.commit(out, "Remover marca d'água", step)
+            self._mark_applied[self.history.current_uid] = snap
+            for old in list(self._mark_applied)[:-20]:
+                del self._mark_applied[old]
+
         self._run_task("Removendo a marca d'água…",
-                       lambda: inpaint.remove_with_mask(img, mask, **values),
-                       lambda out: self.commit(out, "Remover marca d'água", step))
+                       lambda: inpaint.remove_with_mask(img, mask, **values), done)
 
 
     # ========================================================= histórico
     def undo(self) -> None:
+        if self.tabs.currentIndex() == TAB_BACKGROUND and self._marks_undo():
+            return                      # cliques da seleção: valem mesmo durante o cálculo
         if self._guard():
+            return
+        if self._marks_undo():          # primeiro as marcações em andamento, uma por vez
             return
         if self.history.can_undo():
             label = self.history.undo_label()
+            undone_uid = self.history.current_uid
             self._set_working_image(self.history.undo())
+            snap = self._mark_applied.pop(undone_uid, None)
+            if snap is not None and self.tabs.currentIndex() == TAB_WATERMARK:
+                self._wm_restore(snap)  # desfez uma remoção: as marcações voltam para ajustar
             self.statusBar().showMessage(f"Desfeito: {label}", 2500)
+            self._refresh_undo_actions()
 
     def redo(self) -> None:
+        if self.tabs.currentIndex() == TAB_BACKGROUND and self._marks_redo():
+            return
         if self._guard():
+            return
+        if self._marks_redo():
             return
         if self.history.can_redo():
             label = self.history.redo_label()
