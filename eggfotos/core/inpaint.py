@@ -70,6 +70,68 @@ def _composite(img: np.ndarray, filled: np.ndarray, mask: np.ndarray) -> np.ndar
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
+# ------------------------------------------------- ajuste da marcação aos traços
+
+POLARITIES = {"auto": "Automático", "clara": "Marca clara", "escura": "Marca escura"}
+
+
+def snap_to_strokes(img: np.ndarray, mask: np.ndarray, polaridade: str = "auto",
+                    sensibilidade: float = 50) -> np.ndarray:
+    """Aperta uma marcação SOLTA sobre os traços reais da marca d'água.
+
+    Dentro da região marcada, estima o fundo local (mediana grande, que apaga traços finos) e
+    mantém só os pixels que se destacam dele no mesmo sentido (claros ou escuros), acima do
+    ruído medido ao redor. Resultado: máscara bem menor e colada nas letras/logotipo, o que
+    deixa menos área para o preenchimento inventar.
+    """
+    if polaridade not in POLARITIES:
+        raise ValueError(f"Polaridade inválida: {polaridade}")
+    box = _bbox(mask > 127)
+    if box is None:
+        return np.zeros(mask.shape[:2], np.uint8)
+    rgb, _ = split_alpha(img)
+    H, W = rgb.shape[:2]
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    k = int(np.clip(0.3 * min(bw, bh), 7, 0.08 * max(H, W)))
+    k += 1 - k % 2
+    pad = k + 8
+    x0, y0, x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad), min(W, box[2] + pad), min(H, box[3] + pad)
+    gray = cv2.cvtColor(np.ascontiguousarray(rgb[y0:y1, x0:x1]), cv2.COLOR_RGB2GRAY)
+    bg = cv2.medianBlur(gray, k)
+    g, b0 = gray.astype(np.float32), bg.astype(np.float32)
+    # diferença RELATIVA ao que a marca consegue mudar: uma marca clara muda mais um fundo escuro
+    # (J = B + α(255−B)); uma escura muda mais um fundo claro (J = (1−α)B)
+    pos = (g - b0) / (255.0 - b0 + 10.0)
+    neg = (b0 - g) / (b0 + 10.0)
+    m = mask[y0:y1, x0:x1] > 127
+    ring = ~m
+    f = 4.5 - 3.0 * float(np.clip(sensibilidade, 0, 100)) / 100.0
+
+    def limiar(v: np.ndarray) -> float:
+        ref = v[ring] if ring.sum() > 200 else v[m]
+        return max(0.012, f * 1.4826 * float(np.median(np.abs(ref - np.median(ref)))))
+
+    tp, tn = limiar(pos), limiar(neg)
+    strong_pos = float(pos[m & (pos > tp)].sum())
+    strong_neg = float(neg[m & (neg > tn)].sum())
+    if polaridade == "clara" or (polaridade == "auto" and strong_pos >= strong_neg * 1.2):
+        hit = pos > tp
+    elif polaridade == "escura" or (polaridade == "auto" and strong_neg >= strong_pos * 1.2):
+        hit = neg > tn
+    else:
+        hit = (pos > tp) | (neg > tn)
+    hit &= m
+    hit = hit.astype(np.uint8)
+    hit = cv2.morphologyEx(hit, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(hit, connectivity=8)   # tira sujeira pequena
+    keep = np.zeros(n, bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= max(6, int(1e-5 * H * W))
+    hit = keep[lab].astype(np.uint8)
+    out = np.zeros((H, W), np.uint8)
+    out[y0:y1, x0:x1] = hit * 255
+    return out
+
+
 # ------------------------------------------------------------------ cv2.inpaint
 
 def _inpaint_cv(rgb: np.ndarray, mask: np.ndarray, metodo: str, raio: float) -> np.ndarray:

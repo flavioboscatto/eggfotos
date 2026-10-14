@@ -15,6 +15,7 @@ from ..core.background import DEFAULT_MODEL, MODELS, model_available
 from ..core import faces as faces_core
 from ..core import inpaint as inpaint_core
 from ..core.inpaint import METHODS as INPAINT_METHODS
+from ..core.inpaint import POLARITIES
 from ..core.blur import BLUR_TYPES
 from ..core.filters import filter_keys, filter_label
 from ..core.geometry import RATIO_CHOICES, downscale
@@ -719,6 +720,8 @@ class WatermarkPanel(QWidget):
     downloadRequested = pyqtSignal()
     saveTemplateRequested = pyqtSignal()
     learnRequested = pyqtSignal()
+    snapRequested = pyqtSignal(dict)
+    snapUndoRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -748,6 +751,22 @@ class WatermarkPanel(QWidget):
         f1.addWidget(self.lbl_marked)
         f1.addWidget(self.btn_clear)
         lay.addWidget(g1)
+
+        g1b = QGroupBox("Ajuste automático aos traços da marca")
+        f1b = QFormLayout(g1b)
+        self.cmb_pol = QComboBox()
+        for k, label in POLARITIES.items():
+            self.cmb_pol.addItem(label, k)
+        self.sl_sens = _slider(0, 100, 40)
+        self.btn_snap = QPushButton("Apertar marcação aos traços")
+        self.btn_snap.setToolTip("Marque a área de forma solta (retângulo ou pincel largo) e clique aqui: "
+                                 "a marcação encolhe para cobrir só as letras/traços da marca.")
+        self.btn_snap_undo = QPushButton("Voltar à marcação anterior")
+        f1b.addRow("A marca é", self.cmb_pol)
+        f1b.addRow("Sensibilidade", self.sl_sens)
+        f1b.addRow(self.btn_snap)
+        f1b.addRow(self.btn_snap_undo)
+        lay.addWidget(g1b)
 
         g2 = QGroupBox("2. Como preencher")
         f2 = QFormLayout(g2)
@@ -803,10 +822,14 @@ class WatermarkPanel(QWidget):
         self.cmb_metodo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
         self.btn_clear.clicked.connect(self.clearRequested)
         self.btn_save_tpl.clicked.connect(self.saveTemplateRequested)
+        self.btn_snap.clicked.connect(lambda: self.snapRequested.emit(
+            {"polaridade": self.cmb_pol.currentData(), "sensibilidade": self.sl_sens.value()}))
+        self.btn_snap_undo.clicked.connect(self.snapUndoRequested)
         self.btn_learn.clicked.connect(self.learnRequested)
         self.btn_download.clicked.connect(self.downloadRequested)
         self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
         self.set_marked(0)
+        self.set_snap_undo(False)
         self.refresh_model_status()
 
     def tool(self) -> str:
@@ -838,6 +861,10 @@ class WatermarkPanel(QWidget):
         self.btn_apply.setEnabled(count > 0)
         self.btn_clear.setEnabled(count > 0)
         self.btn_save_tpl.setEnabled(count > 0)
+        self.btn_snap.setEnabled(count > 0)
+
+    def set_snap_undo(self, available: bool) -> None:
+        self.btn_snap_undo.setEnabled(available)
 
     def set_template_name(self, nome: str | None) -> None:
         self.lbl_tpl.setText(f"Modelo salvo: {nome}" if nome else "")

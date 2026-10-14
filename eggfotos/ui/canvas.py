@@ -8,7 +8,7 @@ Prévias calculadas sobre uma versão reduzida são exibidas com escala
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QFrame, QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPixmapItem,
@@ -164,12 +164,30 @@ class ImageCanvas(QGraphicsView):
         self.zoomChanged.emit(self.current_zoom())
 
     def wheelEvent(self, event):
+        """Roda do mouse = zoom. Trackpad (rolagem de dois dedos) = mover a foto;
+        com Cmd/Ctrl = zoom. A pinça é tratada em viewportEvent."""
         if not self.has_image:
             return
-        delta = event.angleDelta().y()
-        if delta:
-            self.zoom_by(1.25 if delta > 0 else 0.8)
+        pixel = event.pixelDelta()
+        zoom_mod = bool(event.modifiers() & (Qt.KeyboardModifier.ControlModifier
+                                             | Qt.KeyboardModifier.MetaModifier))
+        if not pixel.isNull() and not zoom_mod:
+            h, v = self.horizontalScrollBar(), self.verticalScrollBar()
+            h.setValue(h.value() - pixel.x())
+            v.setValue(v.value() - pixel.y())
+        else:
+            delta = event.angleDelta().y() or pixel.y()
+            if delta:
+                self.zoom_by(1.0015 ** delta)  # 1 clique de roda (120) ≈ 1,2×; trackpad fica suave
         event.accept()
+
+    def viewportEvent(self, event):
+        if (event.type() == QEvent.Type.NativeGesture and self.has_image
+                and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture):
+            self.zoom_by(1.0 + event.value())   # pinça no trackpad
+            event.accept()
+            return True
+        return super().viewportEvent(event)
 
     # ============================================================ ferramentas
     def set_tool(self, tool: str) -> None:
@@ -443,6 +461,12 @@ class ImageCanvas(QGraphicsView):
             return
         if self._tool == TOOL_CROP and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.cropAccepted.emit()
+            return
+        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) and self.has_image:
+            self.zoom_by(1.25)
+            return
+        if key == Qt.Key.Key_Minus and self.has_image:
+            self.zoom_by(0.8)
             return
         if key == Qt.Key.Key_Escape:
             self.clear_crop()

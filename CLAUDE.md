@@ -35,7 +35,9 @@ eggfotos/
     inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
                            remove_region (retângulo relativo, vai pro lote); só processa a região da máscara.
                            LaMa roda em janelas de 512 px REAIS (até 12; marcas enormes caem no método reduzido)
-                           e restore_grain recoloca o grão do entorno (semente fixa, parâmetro `grao`)
+                           e restore_grain recoloca o grão do entorno (semente fixa, parâmetro `grao`).
+                           snap_to_strokes: aperta uma marcação solta nos traços da marca (fundo por mediana,
+                           diferença relativa ao brilho; polaridade clara/escura/auto); só edição manual
     watermark.py           modelos de marca em ~/.eggfotos/marcas (env EGGFOTOS_MARCAS substitui):
                            MaskTemplate (marcação ancorada ao canto, tamanho/margens ÷ largura da foto,
                            + inpaint) e AlphaTemplate (estima α de marca translúcida branca/preta em
@@ -101,6 +103,9 @@ tests/                     pytest do core e do pipeline
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
 - Seleção por cliques (MobileSAM) não é reproduzível em lote por si só: entra no histórico sem step (como o pincel), a menos que a marcação seja salva como modelo (aba Marca d'água), aí vira `remover_marca_modelo`.
 - Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
+- Zoom: roda do mouse = zoom; trackpad com dois dedos = mover; pinça ou Cmd+rolagem = zoom; teclas +/−;
+  botões na barra de status. Detecção automática de marca em UMA foto não existe de forma confiável:
+  o que há é "apertar aos traços" (assistido) e "aprender de uma pasta" (marca repetida).
 - Botão Original é um interruptor (clique liga/desliga); ao editar ou trocar de aba ele desliga sozinho.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.

@@ -43,7 +43,7 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Fundo | Remover fundo com IA (3 modelos), afinar/suavizar borda, descontaminar cor, fundo transparente, cor sólida ou **desfocado** (efeito retrato); modelo baixado uma vez, sob demanda; entra no lote |
 | Seleção por clique | Clique no objeto (MobileSAM) para escolher o que fica no Fundo, ou o que apagar na Marca d'água; Alt+clique / botão direito tira da seleção |
 | Ocultar rosto | Detecta rostos sozinho (YuNet) e aplica mosaico, embaçar ou tarja; sensibilidade e margem ajustáveis; entra no lote |
-| Marca d'água | Marque com pincel ou retângulo e remova com preenchimento rápido (Telea/Navier-Stokes) ou por IA (LaMa, modelo baixado sob demanda); um retângulo fixo entra no lote. **Em lote:** salve a marcação como modelo (ancorada ao canto, escala com a largura) ou aprenda uma marca translúcida repetida de uma pasta de fotos |
+| Marca d'água | Marque com pincel, retângulo ou clique, **aperte a marcação aos traços da marca** (ajuste automático) e remova com preenchimento rápido (Telea/Navier-Stokes) ou por IA (LaMa, modelo baixado sob demanda); um retângulo fixo entra no lote. **Em lote:** salve a marcação como modelo (ancorada ao canto, escala com a largura) ou aprenda uma marca translúcida repetida de uma pasta de fotos |
 | Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (clique para ver a foto original, clique de novo para voltar) |
 | Lote | Pasta de entrada (com subpastas), receita de passos, prévia em 3 fotos, formato de saída, sufixo, processos paralelos, pular já processadas, log CSV |
 | Receitas | "Editar → Salvar edições como receita" transforma o que você fez na foto aberta numa receita para o lote |
@@ -57,7 +57,9 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Ctrl+B | Processar pasta (lote) |
 | Ctrl+R / Ctrl+Shift+R | Girar 90° direita / esquerda |
 | Ctrl+0 / Ctrl+1 | Ajustar à janela / 100% |
-| Roda do mouse | Zoom |
+| Roda do mouse / pinça / Cmd+rolagem | Zoom |
+| Rolagem de dois dedos (trackpad) | Mover a foto |
+| + / − (na foto) | Aumentar / diminuir zoom |
 | Segurar Espaço | Mão para mover a foto (em qualquer ferramenta) |
 | Enter / Esc | Aplicar / cancelar recorte |
 

@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self._sam_mask: np.ndarray | None = None
         self._click_busy = False
         self._wm_strokes = 0
+        self._wm_loose: np.ndarray | None = None  # marcação solta, guardada antes do "apertar aos traços"
         self._wm_template: str | None = None      # nome do modelo salvo para a marcação atual
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
         self._task: TaskWorker | None = None
@@ -135,7 +136,8 @@ class MainWindow(QMainWindow):
         self.act_resize = self._action("Redimensionar…", self.resize_dialog, "Ctrl+Alt+I")
         self.act_fit = self._action("Ajustar à janela", self.canvas.fit_in_view, "Ctrl+0")
         self.act_100 = self._action("Tamanho real (100%)", self.canvas.zoom_100, "Ctrl+1")
-        self.act_zoom_in = self._action("Aumentar zoom", lambda: self.canvas.zoom_by(1.25), QKeySequence.StandardKey.ZoomIn)
+        self.act_zoom_in = self._action("Aumentar zoom", lambda: self.canvas.zoom_by(1.25),
+                                       [QKeySequence.StandardKey.ZoomIn, "Ctrl+="])
         self.act_zoom_out = self._action("Diminuir zoom", lambda: self.canvas.zoom_by(0.8), QKeySequence.StandardKey.ZoomOut)
         self.act_about = self._action("Sobre o EggFotos", self.about)
 
@@ -174,6 +176,18 @@ class MainWindow(QMainWindow):
         self.lbl_info = QLabel("Abra uma foto (Ctrl+O) ou arraste para a janela")
         self.lbl_zoom = QLabel("")
         self.statusBar().addWidget(self.lbl_info, 1)
+        for act, text, tip in ((self.act_zoom_out, "−", "Diminuir zoom (tecla −)"),
+                               (self.act_zoom_in, "+", "Aumentar zoom (tecla +)"),
+                               (self.act_fit, "Ajustar", "Ajustar à janela (Ctrl+0)"),
+                               (self.act_100, "100%", "Tamanho real (Ctrl+1)")):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setAutoRaise(True)
+            b.clicked.connect(act.trigger)
+            act.changed.connect(lambda a=act, btn=b: btn.setEnabled(a.isEnabled()))
+            b.setEnabled(act.isEnabled())
+            self.statusBar().addPermanentWidget(b)
         self.statusBar().addPermanentWidget(self.lbl_zoom)
 
     def _connect(self) -> None:
@@ -226,6 +240,8 @@ class MainWindow(QMainWindow):
         wp.clearRequested.connect(self._wm_clear)
         wp.applyRequested.connect(self._apply_watermark)
         wp.downloadRequested.connect(self._download_lama)
+        wp.snapRequested.connect(self._wm_snap)
+        wp.snapUndoRequested.connect(self._wm_snap_undo)
         wp.saveTemplateRequested.connect(self._wm_save_template)
         wp.learnRequested.connect(self._wm_learn)
 
@@ -823,6 +839,8 @@ class MainWindow(QMainWindow):
         self._wm_brush = False
         self._wm_strokes = 0
         self._wm_template = None
+        self._wm_loose = None
+        self.wm_panel.set_snap_undo(False)
         self.wm_panel.set_template_name(None)
         self.wm_panel.set_marked(0)
 
@@ -847,6 +865,8 @@ class MainWindow(QMainWindow):
         if brush:
             self._wm_brush = True
             self._wm_strokes += 1
+        self._wm_loose = None     # nova marcação: o "voltar ao anterior" não vale mais
+        self.wm_panel.set_snap_undo(False)
         self._wm_template = None  # a marcação mudou: o modelo salvo não vale mais
         self.wm_panel.set_template_name(None)
         self.wm_panel.set_marked(self._wm_count())
@@ -861,6 +881,39 @@ class MainWindow(QMainWindow):
     def _wm_clear(self) -> None:
         self._wm_reset()
         self._cancel_preview()
+
+    def _wm_snap(self, opts: dict) -> None:
+        if self._wm_mask is None or self.image is None:
+            return
+        img, loose = self.image, self._wm_mask
+
+        def done(snapped):
+            if not snapped.any():
+                QMessageBox.information(
+                    self, APP_NAME,
+                    "Não encontrei traços que se destaquem do fundo nessa área. Tente aumentar a "
+                    "sensibilidade, escolher a cor da marca (clara/escura) ou marcar uma área menor.")
+                return
+            self._wm_loose = loose
+            self._wm_mask = snapped
+            self._wm_template = None
+            self.wm_panel.set_template_name(None)
+            self.wm_panel.set_snap_undo(True)
+            self._wm_show()
+            pct = 100.0 * float((snapped > 0).sum()) / max(1, int((loose > 0).sum()))
+            self.statusBar().showMessage(f"Marcação apertada: agora cobre {pct:.0f}% da área marcada.", 5000)
+
+        self._run_task("Procurando os traços da marca…",
+                       lambda: inpaint.snap_to_strokes(img, loose, **opts), done)
+
+    def _wm_snap_undo(self) -> None:
+        if self._wm_loose is None:
+            return
+        self._wm_mask, self._wm_loose = self._wm_loose, None
+        self._wm_template = None
+        self.wm_panel.set_template_name(None)
+        self.wm_panel.set_snap_undo(False)
+        self._wm_show()
 
     def _wm_save_template(self) -> None:
         if self._wm_mask is None:

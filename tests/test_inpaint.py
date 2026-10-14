@@ -147,3 +147,53 @@ def test_grain_is_deterministic():
     a = inpaint.remove_with_mask(base, mask, "telea")
     b = inpaint.remove_with_mask(base, mask, "telea")
     assert np.array_equal(a, b)
+
+
+# ------------------------------------------------ ajuste aos traços (snap)
+
+def _textured_with_text(cor, alpha=0.4, seed=2):
+    rng = np.random.default_rng(seed)
+    h, w = 400, 600
+    y, x = np.mgrid[0:h, 0:w]
+    base = (110 + 50 * np.sin(x / 70.0) + 35 * np.cos(y / 55.0))[..., None] * np.array([1.0, 0.95, 0.85])
+    base = np.clip(base + rng.normal(0, 4, (h, w, 1)), 0, 255).astype(np.float32)
+    txt = np.zeros((h, w), np.uint8)
+    inpaint.cv2.putText(txt, "COPYRIGHT", (120, 230), inpaint.cv2.FONT_HERSHEY_SIMPLEX, 2.0, 255, 5)
+    a = (txt.astype(np.float32) / 255.0 * alpha)[..., None]
+    marked = np.clip(base * (1 - a) + cor * a + 0.5, 0, 255).astype(np.uint8)
+    loose = np.zeros((h, w), np.uint8)
+    loose[170:260, 100:520] = 255                  # retângulo solto em volta do texto
+    return np.clip(base, 0, 255).astype(np.uint8), marked, txt > 0, loose
+
+
+@pytest.mark.parametrize("cor", [255.0, 0.0])
+def test_snap_tightens_mask_onto_the_text(cor):
+    clean, marked, truth, loose = _textured_with_text(cor)
+    snapped = inpaint.snap_to_strokes(marked, loose) > 0
+    assert snapped.sum() < 0.4 * (loose > 0).sum()                 # bem mais justa que o retângulo
+    assert (snapped & truth).sum() / truth.sum() > 0.8            # pega a maior parte do texto
+    assert (snapped & ~(inpaint.cv2.dilate(truth.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)).sum() \
+        < 0.35 * snapped.sum()                                     # pouco falso positivo
+
+
+def test_snap_improves_the_inpaint_result():
+    clean, marked, truth, loose = _textured_with_text(255.0)
+    region = loose > 0
+    err = lambda out: np.abs(out.astype(int) - clean)[region].mean()
+    out_loose = inpaint.remove_with_mask(marked, loose, "telea", expandir=0)
+    snapped = inpaint.snap_to_strokes(marked, loose)
+    out_snap = inpaint.remove_with_mask(marked, snapped, "telea", expandir=30)
+    assert err(out_snap) < err(out_loose)
+
+
+def test_snap_polarity_and_validation():
+    clean, marked, truth, loose = _textured_with_text(255.0)
+    cov = lambda pol: (inpaint.snap_to_strokes(marked, loose, pol, 40) > 0)[truth].mean()
+    assert cov("clara") > 0.8 and cov("escura") < 0.2          # marca branca: só "clara" acerta
+    assert cov("auto") > 0.8
+    assert inpaint.snap_to_strokes(marked, np.zeros_like(loose)).sum() == 0
+    with pytest.raises(ValueError):
+        inpaint.snap_to_strokes(marked, loose, "verde")
+    low = inpaint.snap_to_strokes(marked, loose, sensibilidade=0).sum()
+    high = inpaint.snap_to_strokes(marked, loose, sensibilidade=100).sum()
+    assert high >= low
