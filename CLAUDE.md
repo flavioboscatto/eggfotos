@@ -77,7 +77,7 @@ tests/                     pytest do core e do pipeline
    servir em fotos de tamanhos diferentes. Na cena do canvas, coordenadas = pixels reais.
 5. **Histórico:** `MainWindow.commit(img, rótulo, step)`; `step=None` para edições
    manuais não reproduzíveis (ex.: pincel).
-6. **Threads:** só arrays e objetos Python atravessam threads; `QPixmap` apenas na thread
+6. **Threads:** o resultado de uma tarefa só entra no histórico se a foto não mudou (`uid`); só arrays e objetos Python atravessam threads; `QPixmap` apenas na thread
    principal. O `core` e o `pipeline` não podem importar PyQt6 (o lote roda em processos).
 7. **Originais nunca são sobrescritos pelo lote** (validado em `runner.validate_job`).
 8. Erros por foto no lote vão para o log CSV; o lote continua.
@@ -90,9 +90,11 @@ tests/                     pytest do core e do pipeline
 
 ## Pendências conhecidas da fase atual
 
-- Operações em resolução total (ajustes, filtros, recorte…) ainda rodam na thread da UI com
-  cursor de espera (`_busy`). Só a aba Fundo usa QThread (`_run_task`, sem barra de progresso real).
-  Migrar o restante para `_run_task`.
+- Operações pesadas rodam em segundo plano via `MainWindow._run_task` / `_edit_async` (QThread `TaskWorker`):
+  cursor de espera na hora, janelinha com Cancelar após 0,3 s (cancelar descarta o resultado; a conta termina
+  sozinha), e `_guard()` bloqueia desfazer/abrir/salvar enquanto roda. Só salvar arquivo ainda é síncrono
+  (`_busy`), porque `_confirm_discard`/fechar precisam do resultado na hora. Sem barra de progresso real
+  (as contas são uma chamada só de NumPy/OpenCV, não dá para medir).
 - Remoção de fundo: a descontaminação é própria (convolução normalizada), não usa pymatting
   (que o rembg instala, mas não é importado). Se a borda de cabelo/pelo ficar fraca, avaliar
   `pymatting.estimate_foreground_ml` (melhor, porém lento e com JIT na 1ª execução).

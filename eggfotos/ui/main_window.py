@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 import cv2
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self._wm_template: str | None = None      # nome do modelo salvo para a marcação atual
         self._wm_brush = False                    # houve traço de pincel (marcação não reproduzível)
         self._task: TaskWorker | None = None
+        self._zombies: list[TaskWorker] = []  # threads vivas (inclui as canceladas)
         self._task_dialog: QProgressDialog | None = None
 
         self.canvas = ImageCanvas()
@@ -282,8 +283,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"✓ {label}", 2500)
 
     def _busy(self, func: Callable[[], np.ndarray]) -> np.ndarray | None:
-        """Roda uma operação na resolução total com cursor de espera.
-        (Fase seguinte: mover para QThread com barra de progresso.)"""
+        """Roda na própria thread da UI, com cursor de espera. Só para o que precisa do resultado
+        na hora (salvar arquivo, que _confirm_discard e o fechamento esperam); o resto usa _run_task."""
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         try:
@@ -298,13 +299,12 @@ class MainWindow(QMainWindow):
         """Aplica um step reproduzível à foto inteira e grava no histórico."""
         if self.image is None:
             return
-        out = self._busy(lambda: apply_step(self.image, step))
-        if out is not None:
-            self.commit(out, label or get_operation(step["op"]).label, step)
+        self._edit_async(lambda img: apply_step(img, step),
+                         label or get_operation(step["op"]).label, step)
 
     # ============================================================= prévias
     def _run_preview(self, render: Callable[[], None]) -> None:
-        if self.image is None:
+        if self.image is None or self._working:
             return
         self._uncheck_original()
         self._pending = render
@@ -405,10 +405,11 @@ class MainWindow(QMainWindow):
         H, W = self.image.shape[:2]
         x, y, w, h = rect
         step = {"op": "recortar_relativo", "x": x / W, "y": y / H, "w": w / W, "h": h / H}
-        out = self._busy(lambda: geometry.crop(self.image, x, y, w, h))  # pixels exatos
-        if out is not None:
-            self.canvas.clear_crop()
-            self.commit(out, "Recortar", step)
+        if self._guard():
+            return
+        out = geometry.crop(self.image, x, y, w, h)  # pixels exatos; é só fatiar, instantâneo
+        self.canvas.clear_crop()
+        self.commit(out, "Recortar", step)
 
     def rotate(self, angle: int) -> None:
         self._apply_op({"op": "girar", "angulo": angle}, f"Girar {angle}°")
@@ -441,9 +442,7 @@ class MainWindow(QMainWindow):
             self._apply_op({"op": "redimensionar", "lado_maior": max(nw, nh), "ampliar": True},
                            f"Redimensionar {nw}×{nh}")
         else:
-            out = self._busy(lambda: geometry.resize(self.image, nw, nh))
-            if out is not None:
-                self.commit(out, f"Redimensionar {nw}×{nh}", None)
+            self._edit_async(lambda img: geometry.resize(img, nw, nh), f"Redimensionar {nw}×{nh}", None)
 
     # ============================================================== borrar
     def _sync_blur_tool(self) -> None:
@@ -464,9 +463,8 @@ class MainWindow(QMainWindow):
             self._wm_add_mask(mask, brush=True)
             return
         bp = self.blur_panel
-        out = self._busy(lambda: blur_with_mask(self.image, mask, bp.tipo(), bp.intensidade(), bp.cor()))
-        if out is not None:
-            self.commit(out, "Borrar (pincel)", None)
+        tipo, inten, cor = bp.tipo(), bp.intensidade(), bp.cor()
+        self._edit_async(lambda img: blur_with_mask(img, mask, tipo, inten, cor), "Borrar (pincel)", None)
 
     def _apply_region_blur(self, rect) -> None:
         if self.image is None:
@@ -491,35 +489,88 @@ class MainWindow(QMainWindow):
         self._matte_manual = False
         self.background_panel.reset()
 
-    def _run_task(self, text: str, func: Callable[[], object], on_done: Callable[[object], None]) -> None:
-        """Roda `func` numa QThread com uma janela de espera (sem barra de progresso real)."""
+    @property
+    def _working(self) -> bool:
+        return self._task is not None
+
+    def _guard(self) -> bool:
+        """True (e avisa) se há uma operação em andamento: ações que mexem na foto esperam."""
         if self._task is not None:
-            return
-        dlg = QProgressDialog(text, "", 0, 0, self)
-        dlg.setCancelButton(None)
+            self.statusBar().showMessage("Aguarde: operação em andamento…", 2500)
+            return True
+        return False
+
+    def _run_task(self, text: str, func: Callable[[], object], on_done: Callable[[object], None],
+                  cancelable: bool = True) -> bool:
+        """Roda `func` numa QThread. Cursor de espera na hora; a janelinha com Cancelar aparece se
+        passar de 0,3 s. Cancelar descarta o resultado (a conta termina em segundo plano).
+        Devolve False se já havia outra operação rodando."""
+        if self._guard():
+            return False
+        dlg = QProgressDialog(text, "Cancelar" if cancelable else "", 0, 0, self)
+        if not cancelable:
+            dlg.setCancelButton(None)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setMinimumDuration(0)
         dlg.setWindowTitle(APP_NAME)
-        dlg.show()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         task = TaskWorker(func, self)
+        state = {"cancelled": False, "closed": False}
 
         def finish():
+            if state["closed"]:
+                return
+            state["closed"] = True
+            QApplication.restoreOverrideCursor()
             dlg.close()
-            task.deleteLater()
-            self._task = self._task_dialog = None
+            dlg.deleteLater()
+            if self._task is task:
+                self._task = self._task_dialog = None
 
         def ok(result):
             finish()
-            on_done(result)
+            if not state["cancelled"]:
+                on_done(result)
 
         def fail(msg):
             finish()
-            QMessageBox.warning(self, APP_NAME, msg)
+            if not state["cancelled"]:
+                QMessageBox.warning(self, APP_NAME, msg)
 
+        def cancel():
+            if state["closed"]:  # o QProgressDialog também emite "canceled" ao ser fechado por nós
+                return
+            state["cancelled"] = True
+            finish()
+            self.statusBar().showMessage("Cancelado.", 2500)
+
+        def release():  # a thread terminou de verdade
+            if task in self._zombies:
+                self._zombies.remove(task)
+            task.deleteLater()
+
+        self._zombies.append(task)  # referência até a thread acabar (evita destruir QThread rodando)
+        task.finished.connect(release)
         task.done.connect(ok)
         task.failed.connect(fail)
+        dlg.canceled.connect(cancel)
         self._task, self._task_dialog = task, dlg
         task.start()
+        QTimer.singleShot(300, lambda: (not state["closed"]) and dlg.show())
+        return True
+
+    def _edit_async(self, func: Callable[[np.ndarray], np.ndarray], label: str, step: dict | None) -> None:
+        """Aplica `func(foto)` em segundo plano e grava o resultado no histórico (se a foto não mudou)."""
+        if self.image is None:
+            return
+        img, uid = self.image, self.history.current_uid
+
+        def done(out):
+            if self.history.current_uid == uid:
+                self.commit(out, label, step)
+
+        self._run_task(f"{label}…", lambda: func(img), done)
 
     def _download_model(self, modelo: str) -> None:
         nome, rotulo = background.MODELS[modelo]
@@ -895,12 +946,16 @@ class MainWindow(QMainWindow):
 
     # ========================================================= histórico
     def undo(self) -> None:
+        if self._guard():
+            return
         if self.history.can_undo():
             label = self.history.undo_label()
             self._set_working_image(self.history.undo())
             self.statusBar().showMessage(f"Desfeito: {label}", 2500)
 
     def redo(self) -> None:
+        if self._guard():
+            return
         if self.history.can_redo():
             label = self.history.redo_label()
             self._set_working_image(self.history.redo())
@@ -923,13 +978,15 @@ class MainWindow(QMainWindow):
         return str(self.settings.value("last_dir", str(Path.home() / "Pictures")))
 
     def open_dialog(self) -> None:
-        if not self._confirm_discard():
+        if self._guard() or not self._confirm_discard():
             return
         path, _ = QFileDialog.getOpenFileName(self, "Abrir foto", self._last_dir(), OPEN_FILTER)
         if path:
             self.open_file(path)
 
     def open_file(self, path: str | Path) -> None:
+        if self._guard():
+            return
         path = Path(path)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -965,7 +1022,7 @@ class MainWindow(QMainWindow):
         return True
 
     def save(self) -> bool:
-        if self.image is None:
+        if self.image is None or self._guard():
             return False
         if self.path is None:
             return self.save_as()
@@ -985,7 +1042,7 @@ class MainWindow(QMainWindow):
         return self._write(self.path)
 
     def save_as(self) -> bool:
-        if self.image is None:
+        if self.image is None or self._guard():
             return False
         base = self.path.parent if self.path else Path(self._last_dir())
         stem = f"{self.path.stem}_egg" if self.path else "foto_egg"
@@ -1054,5 +1111,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.filters_panel.shutdown()
+        for t in list(self._zombies):  # espera as contas em segundo plano acabarem
+            t.wait(15000)
         self.settings.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
