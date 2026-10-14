@@ -45,6 +45,8 @@ eggfotos/
                            MaskTemplate (marcação ancorada ao canto, tamanho/margens ÷ largura da foto,
                            + inpaint) e AlphaTemplate (estima α de marca translúcida branca/preta em
                            N fotos e inverte I=(J−α·cor)/(1−α)); ops remover_marca_modelo/_estimada
+    presets.py             perfis prontos da remoção de marca (PRESETS: liso, texto fino, textura, detalhes, grande,
+                           retângulo solto, grão alto, foto limpa) + perfis do usuário em marcas/perfis.json
     segment.py             MobileSAM (ONNX): embed(img) [~0,5 s, cacheável] → predict(emb, pontos) [instantâneo];
                            o encoder NÃO redimensiona: a foto vai com lado maior = 1024 e o decoder
                            recebe orig_im_size = tamanho real; pontos relativos, rótulo 1/0
@@ -112,6 +114,8 @@ tests/                     pytest do core e do pipeline
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
 - Seleção por cliques (MobileSAM) não é reproduzível em lote por si só: entra no histórico sem step (como o pincel), a menos que a marcação seja salva como modelo (aba Marca d'água), aí vira `remover_marca_modelo`.
 - Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
+- Perfis da Marca d'água: valores iniciais, não regras; mexer em qualquer controle volta para "Personalizado".
+  Novo perfil pronto = uma linha em `presets.PRESETS` (o teste valida faixas e se a receita aceita).
 - Barra lateral: largura inicial 400 px, redimensionável e lembrada (`saveState`); `_slider_row` mostra o valor ao lado
   do slider. Painel novo: use `ToolTabs.addTab` (aplica `compact`) e confira que `minimumSizeHint().width()` cabe
   em ~330 px (há teste em tests/test_ui_layout.py).

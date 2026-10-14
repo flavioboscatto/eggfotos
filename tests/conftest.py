@@ -77,3 +77,14 @@ def marks_tmp(monkeypatch, tmp_path):
     from eggfotos.core import watermark
     monkeypatch.setattr(watermark, "marks_dir", lambda: tmp_path)
     return tmp_path
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """QApplication única da sessão (precisa ficar referenciada, senão o Qt aborta)."""
+    pytest.importorskip("PyQt6")
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    return app

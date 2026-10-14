@@ -5,7 +5,7 @@ import numpy as np
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QButtonGroup, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
+    QButtonGroup, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QInputDialog, QMessageBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListView, QListWidget,
     QListWidgetItem, QPushButton, QRadioButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -14,6 +14,7 @@ from ..core.adjustments import ADJUSTMENT_KEYS, ADJUSTMENT_LABELS, adjustment_ra
 from ..core.background import DEFAULT_MODEL, MODELS, model_available
 from ..core import faces as faces_core
 from ..core import inpaint as inpaint_core
+from ..core import presets
 from ..core.inpaint import METHODS as INPAINT_METHODS
 from ..core.inpaint import POLARITIES
 from ..core.blur import BLUR_TYPES
@@ -787,6 +788,17 @@ class WatermarkPanel(QWidget):
 
         g2 = QGroupBox("2. Como preencher")
         f2 = QFormLayout(g2)
+        self.cmb_perfil = QComboBox()
+        self.lbl_dica = QLabel("")
+        self.lbl_dica.setObjectName("hint")
+        self.lbl_dica.setWordWrap(True)
+        self.btn_perfil_salvar = QPushButton("Salvar como perfil…")
+        self.btn_perfil_excluir = QPushButton("Excluir perfil")
+        row_perfil = QWidget()
+        rp = QHBoxLayout(row_perfil)
+        rp.setContentsMargins(0, 0, 0, 0)
+        rp.addWidget(self.btn_perfil_salvar)
+        rp.addWidget(self.btn_perfil_excluir)
         self.cmb_metodo = QComboBox()
         for k, label in INPAINT_METHODS.items():
             self.cmb_metodo.addItem(label, k)
@@ -803,6 +815,8 @@ class WatermarkPanel(QWidget):
         self.sl_raio.setToolTip("Telea / Navier-Stokes: alcance do preenchimento a partir das bordas.")
         self.sl_emenda.setToolTip("Suavidade da borda onde o trecho preenchido encontra a foto.")
         self.sl_grao.setToolTip("Quanto do grão da foto ao redor é recolocado no trecho preenchido (0 = nenhum).")
+        f2.addRow("Perfil", self.cmb_perfil)
+        f2.addRow(self.lbl_dica)
         f2.addRow("Método", self.cmb_metodo)
         f2.addRow(self.lbl_model)
         f2.addRow(self.btn_download)
@@ -813,6 +827,7 @@ class WatermarkPanel(QWidget):
         f2.addRow(self.lbl_ctx, ctx_row)
         f2.addRow("Suavizar a emenda", emenda_row)
         f2.addRow("Grão da foto", grao_row)
+        f2.addRow(row_perfil)
         lay.addWidget(g2)
 
         btns = QHBoxLayout()
@@ -843,6 +858,14 @@ class WatermarkPanel(QWidget):
         ))
         lay.addStretch()
 
+        self._applying = False
+        self.reload_profiles()
+        self.cmb_perfil.currentIndexChanged.connect(self._on_profile_chosen)
+        for sl in (self.sl_expandir, self.sl_raio, self.sl_contexto, self.sl_emenda, self.sl_grao, self.sl_sens):
+            sl.valueChanged.connect(lambda _=0: self._mark_custom())
+        self.cmb_metodo.currentIndexChanged.connect(lambda _: self._mark_custom())
+        self.btn_perfil_salvar.clicked.connect(self._save_profile)
+        self.btn_perfil_excluir.clicked.connect(self._delete_profile)
         self.grp_tool.idToggled.connect(lambda _id, on: on and self.settingsChanged.emit())
         self.sp_brush.valueChanged.connect(lambda _: self.settingsChanged.emit())
         self.cmb_metodo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
@@ -857,6 +880,93 @@ class WatermarkPanel(QWidget):
         self.set_marked(0)
         self.set_snap_undo(False)
         self.refresh_model_status()
+
+    # ------------------------------------------------------------- perfis
+    def reload_profiles(self, select: str | None = None) -> None:
+        """Recarrega a lista: Personalizado, perfis prontos e os do usuário."""
+        self._applying = True
+        self.cmb_perfil.clear()
+        self.cmb_perfil.addItem(presets.CUSTOM, None)
+        for key in presets.preset_keys():
+            self.cmb_perfil.addItem(presets.PRESETS[key].label, f"preset:{key}")
+        for nome in presets.load_user_profiles():
+            self.cmb_perfil.addItem(f"★ {nome}", f"user:{nome}")
+        i = self.cmb_perfil.findData(select) if select else 0
+        self.cmb_perfil.setCurrentIndex(max(0, i))
+        self._applying = False
+        self._update_profile_ui()
+
+    def _profile_values(self, data: str | None) -> tuple[dict, str] | None:
+        if not data:
+            return None
+        kind, _, key = data.partition(":")
+        if kind == "preset" and key in presets.PRESETS:
+            p = presets.PRESETS[key]
+            return p.values(), p.dica
+        if kind == "user":
+            v = presets.load_user_profiles().get(key)
+            if v is not None:
+                return v, "Perfil seu. Ajuste os controles e salve de novo com o mesmo nome para atualizar."
+        return None
+
+    def _on_profile_chosen(self) -> None:
+        if self._applying:
+            return
+        got = self._profile_values(self.cmb_perfil.currentData())
+        if got is not None:
+            values, _ = got
+            self._applying = True
+            self.cmb_metodo.setCurrentIndex(max(0, self.cmb_metodo.findData(values["metodo"])))
+            for sl, key in ((self.sl_expandir, "expandir"), (self.sl_raio, "raio"),
+                            (self.sl_contexto, "contexto"), (self.sl_emenda, "emenda"),
+                            (self.sl_grao, "grao_forca"), (self.sl_sens, "sensibilidade")):
+                sl.setValue(int(values[key]))
+            self._applying = False
+            self.refresh_model_status()
+        self._update_profile_ui()
+
+    def _mark_custom(self) -> None:
+        """Mexeu num controle: o conjunto deixa de ser o perfil escolhido."""
+        if self._applying or self.cmb_perfil.currentIndex() == 0:
+            return
+        self._applying = True
+        self.cmb_perfil.setCurrentIndex(0)
+        self._applying = False
+        self._update_profile_ui()
+
+    def _update_profile_ui(self) -> None:
+        data = self.cmb_perfil.currentData()
+        got = self._profile_values(data)
+        self.lbl_dica.setText(got[1] if got else "Ajuste os controles abaixo ou escolha um perfil pronto.")
+        self.btn_perfil_excluir.setEnabled(bool(data) and data.startswith("user:"))
+
+    def current_settings(self) -> dict:
+        """Todos os controles do preenchimento (usado para salvar um perfil)."""
+        v = self.values()
+        return {"metodo": v["metodo"], "expandir": v["expandir"], "raio": v["raio"],
+                "contexto": v["contexto"], "emenda": v["emenda"], "grao_forca": v["grao_forca"],
+                "sensibilidade": self.sl_sens.value()}
+
+    def _save_profile(self) -> None:
+        nome, ok = QInputDialog.getText(self, "Salvar perfil", "Nome do perfil:", text="Meu perfil")
+        if not ok or not nome.strip():
+            return
+        try:
+            nome = presets.save_user_profile(nome, self.current_settings())
+        except ValueError as e:
+            QMessageBox.warning(self, "Perfil", str(e))
+            return
+        self.reload_profiles(select=f"user:{nome}")
+
+    def _delete_profile(self) -> None:
+        data = self.cmb_perfil.currentData() or ""
+        if not data.startswith("user:"):
+            return
+        nome = data[5:]
+        r = QMessageBox.question(self, "Excluir perfil", f"Excluir o perfil \"{nome}\"?")
+        if r == QMessageBox.StandardButton.Yes:
+            presets.delete_user_profile(nome)
+            self.reload_profiles()
 
     def tool(self) -> str:
         return self.grp_tool.checkedButton().property("key")
