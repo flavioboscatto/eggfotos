@@ -17,11 +17,19 @@ QToolButton:hover {{ background: #34343b; }}
 QToolButton:pressed, QToolButton:checked {{ background: {ACCENT}; color: #1d1d21; }}
 QDockWidget::title {{ background: #1d1d21; padding: 6px; }}
 QTabWidget::pane {{ border: none; }}
+QPushButton#toolTab {{ background: #1d1d21; border: none; border-radius: 4px; padding: 5px 4px; font-size: 9pt; }}
+QPushButton#toolTab:hover {{ background: #34343b; }}
+QPushButton#toolTab:checked {{ background: #2d2d33; color: {ACCENT}; font-weight: bold; }}
+QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}
+QScrollBar:vertical {{ background: #1b1b1f; width: 10px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: #4a4a52; border-radius: 4px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QTabBar::tab {{ background: #1d1d21; padding: 6px 10px; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
 QTabBar::tab:selected {{ background: #2d2d33; color: {ACCENT}; }}
-QGroupBox {{ border: 1px solid #3a3a42; border-radius: 6px; margin-top: 10px; padding-top: 6px; }}
+QGroupBox {{ border: 1px solid #3a3a42; border-radius: 6px; margin-top: 8px; padding-top: 8px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: {ACCENT}; }}
-QPushButton {{ background: #34343b; border: 1px solid #44444c; border-radius: 4px; padding: 5px 12px; }}
+QPushButton {{ background: #34343b; border: 1px solid #44444c; border-radius: 4px; padding: 4px 8px; }}
 QPushButton:hover {{ border-color: {ACCENT}; }}
 QPushButton:disabled {{ color: #777; border-color: #333; }}
 QPushButton#primary {{ background: {ACCENT}; color: #1d1d21; border: none; font-weight: bold; }}

@@ -24,9 +24,9 @@ from .background import ModelNotDownloadedError, _rembg, models_dir
 from .imgutils import merge_alpha, split_alpha
 
 METHODS = {
-    "telea": "Rápido — Telea (sem modelo)",
-    "ns": "Rápido — Navier-Stokes (sem modelo)",
-    "lama": "Qualidade — LaMa (IA, baixa um modelo)",
+    "telea": "Telea (rápido, sem modelo)",
+    "ns": "Navier-Stokes (rápido, sem modelo)",
+    "lama": "LaMa (IA, melhor qualidade)",
 }
 LAMA_FILE = "lama_fp32.onnx"
 LAMA_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/" + LAMA_FILE
@@ -62,10 +62,12 @@ def _bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
 
-def _composite(img: np.ndarray, filled: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Cola o preenchido só dentro da máscara, com borda levemente suave."""
-    soft = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), max(0.8, 0.0008 * max(mask.shape)))
-    soft = np.maximum(soft, mask.astype(np.float32) / 255.0)[..., None]  # nunca deixa vazar a marca
+def _composite(img: np.ndarray, filled: np.ndarray, mask: np.ndarray, emenda: float = 20) -> np.ndarray:
+    """Cola o preenchido só dentro da máscara. `emenda` (0–100): suavidade da borda da colagem."""
+    hard = mask.astype(np.float32) / 255.0
+    sigma = float(np.clip(emenda, 0, 100)) / 100.0 * 0.004 * max(mask.shape[:2])
+    soft = cv2.GaussianBlur(hard, (0, 0), sigma) if sigma >= 0.3 else hard
+    soft = np.maximum(soft, hard)[..., None]  # nunca deixa vazar a marca
     out = img.astype(np.float32) * (1.0 - soft) + filled.astype(np.float32) * soft
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
@@ -212,7 +214,7 @@ def _lama_run(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 WINDOW = LAMA_SIZE          # janela nativa do LaMa (px)
-CTX = 96                    # contexto mínimo ao redor de cada pixel preenchido (px)
+CTX = 96                    # contexto padrão ao redor de cada pixel preenchido (px)
 MAX_WINDOWS = 12            # acima disso, cai no método reduzido (mais rápido, mais mole)
 
 
@@ -235,7 +237,7 @@ def _inpaint_lama_downscaled(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
-def _inpaint_lama(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def _inpaint_lama(rgb: np.ndarray, mask: np.ndarray, ctx: int = CTX) -> np.ndarray:
     """LaMa em janelas nativas de 512 px. Cada janela preenche só os pixels da máscara que têm
     contexto suficiente dentro dela; as seguintes já enxergam o que foi preenchido."""
     H, W = rgb.shape[:2]
@@ -248,21 +250,21 @@ def _inpaint_lama(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         if len(cols) == 0:
             return out
         px = int(cols[0])                         # varre da esquerda para a direita, em faixas
-        x0 = int(np.clip(px - CTX, 0, W - WINDOW))
+        x0 = int(np.clip(px - ctx, 0, W - WINDOW))
         x1 = x0 + WINDOW
-        ix0 = x0 + (CTX if x0 > 0 else 0)
-        ix1 = x1 - (CTX if x1 < W else 0)
+        ix0 = x0 + (ctx if x0 > 0 else 0)
+        ix1 = x1 - (ctx if x1 < W else 0)
         rows = np.flatnonzero(todo[:, ix0:ix1].any(axis=1))   # linhas pendentes dentro da faixa
         y_min, y_max = int(rows[0]), int(rows[-1])
         span = y_max - y_min + 1
-        if span <= WINDOW - 2 * CTX:              # a faixa cabe: centraliza nela
+        if span <= WINDOW - 2 * ctx:              # a faixa cabe: centraliza nela
             y0 = y_min - (WINDOW - span) // 2
         else:
-            y0 = y_min - CTX
+            y0 = y_min - ctx
         y0 = int(np.clip(y0, 0, H - WINDOW))
         y1 = y0 + WINDOW
-        iy0 = y0 + (CTX if y0 > 0 else 0)
-        iy1 = y1 - (CTX if y1 < H else 0)
+        iy0 = y0 + (ctx if y0 > 0 else 0)
+        iy1 = y1 - (ctx if y1 < H else 0)
         inner = np.zeros_like(todo)
         inner[iy0:iy1, ix0:ix1] = todo[iy0:iy1, ix0:ix1]
         if not inner.any():                       # segurança: nunca ficar preso
@@ -285,7 +287,8 @@ def _noise_std(ch: np.ndarray, region: np.ndarray) -> float:
     return float(vals.std()) if vals.size > 50 else 0.0
 
 
-def restore_grain(original: np.ndarray, filled: np.ndarray, mask: np.ndarray, seed: int = 5) -> np.ndarray:
+def restore_grain(original: np.ndarray, filled: np.ndarray, mask: np.ndarray, seed: int = 5,
+                  forca: float = 100) -> np.ndarray:
     """Recoloca no trecho preenchido o grão que a foto tem ao redor (o preenchimento sai liso).
 
     Mede o desvio do grão num anel em volta da máscara e no próprio trecho preenchido;
@@ -299,7 +302,7 @@ def restore_grain(original: np.ndarray, filled: np.ndarray, mask: np.ndarray, se
     gray_o = cv2.cvtColor(original, cv2.COLOR_RGB2GRAY)
     gray_f = cv2.cvtColor(filled, cv2.COLOR_RGB2GRAY)
     want, have = _noise_std(gray_o, ring), _noise_std(gray_f, inside)
-    extra = float(np.sqrt(max(0.0, want * want - have * have)))
+    extra = float(np.sqrt(max(0.0, want * want - have * have))) * max(0.0, float(forca)) / 100.0
     if extra < 0.3:
         return filled
     noise = np.random.default_rng(seed).standard_normal((H, W)).astype(np.float32)
@@ -320,9 +323,16 @@ def remove_with_mask(
     expandir: float = 30,
     raio: float = 50,
     grao: bool = True,
+    contexto: float = 40,
+    emenda: float = 20,
+    grao_forca: float = 100,
 ) -> np.ndarray:
     """Apaga a região da máscara (uint8 HxW, >127 = apagar) e a preenche.
-    `grao`: recoloca no trecho preenchido o grão da foto ao redor."""
+
+    expandir (0–100): engorda a marcação.  raio (1–100): alcance do Telea/NS.
+    contexto (0–100): quanto da vizinhança o LaMa enxerga em cada janela (48–168 px).
+    emenda (0–100): suavidade da borda onde o preenchimento encontra a foto.
+    grao / grao_forca (%): recoloca o grão da foto ao redor no trecho preenchido."""
     if metodo not in METHODS:
         raise ValueError(f"Método inválido: {metodo}")
     if mask.shape[:2] != img.shape[:2]:
@@ -332,10 +342,11 @@ def remove_with_mask(
     if not m.any():
         return img.copy()
     rgb = np.ascontiguousarray(rgb)
-    filled = _inpaint_lama(rgb, m) if metodo == "lama" else _inpaint_cv(rgb, m, metodo, raio)
-    result = _composite(rgb, filled, m)
-    if grao:
-        result = restore_grain(rgb, result, m)
+    ctx_px = int(round(48 + 1.2 * float(np.clip(contexto, 0, 100))))
+    filled = _inpaint_lama(rgb, m, ctx_px) if metodo == "lama" else _inpaint_cv(rgb, m, metodo, raio)
+    result = _composite(rgb, filled, m, emenda)
+    if grao and grao_forca > 0:
+        result = restore_grain(rgb, result, m, forca=grao_forca)
     return merge_alpha(result, alpha)
 
 
@@ -346,6 +357,10 @@ def remove_region(
     expandir: float = 30,
     raio: float = 50,
     grao: bool = True,
+    contexto: float = 40,
+    emenda: float = 20,
+    grao_forca: float = 100,
 ) -> np.ndarray:
     """Apaga um retângulo em coordenadas RELATIVAS (0–1): reproduzível no lote."""
-    return remove_with_mask(img, rect_mask(img.shape, x, y, w, h), metodo, expandir, raio, grao)
+    return remove_with_mask(img, rect_mask(img.shape, x, y, w, h), metodo, expandir, raio, grao,
+                            contexto, emenda, grao_forca)

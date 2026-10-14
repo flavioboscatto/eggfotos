@@ -31,6 +31,21 @@ def _hint(text: str) -> QLabel:
     return lb
 
 
+def _slider_row(minimum: int, maximum: int, value: int, suffix: str = "") -> tuple[QWidget, QSlider]:
+    """Slider com o número ao lado (para o usuário ver o valor exato)."""
+    s = _slider(minimum, maximum, value)
+    lb = QLabel(f"{value}{suffix}")
+    lb.setObjectName("value")
+    lb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    s.valueChanged.connect(lambda v: lb.setText(f"{v}{suffix}"))
+    box = QWidget()
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(s, 1)
+    row.addWidget(lb)
+    return box, s
+
+
 def _slider(minimum: int, maximum: int, value: int) -> QSlider:
     s = QSlider(Qt.Orientation.Horizontal)
     s.setRange(minimum, maximum)
@@ -364,8 +379,8 @@ class BlurPanel(QWidget):
         for k, label in BLUR_TYPES.items():
             self.cmb_tipo.addItem(label, k)
         form.addRow("Tipo", self.cmb_tipo)
-        self.sl_int = _slider(1, 100, 50)
-        form.addRow("Intensidade", self.sl_int)
+        int_row, self.sl_int = _slider_row(1, 100, 50)
+        form.addRow("Intensidade", int_row)
         self.sp_brush = QSpinBox()
         self.sp_brush.setRange(2, 2000)
         self.sp_brush.setValue(80)
@@ -478,10 +493,10 @@ class BackgroundPanel(QWidget):
 
         self.g2 = QGroupBox("2. Refinar")
         f2 = QFormLayout(self.g2)
-        self.sl_encolher = _slider(-100, 100, 0)
-        self.sl_suavizar = _slider(0, 100, 20)
-        f2.addRow("Afinar (+) / engordar (−)", self.sl_encolher)
-        f2.addRow("Suavizar borda", self.sl_suavizar)
+        enc_row, self.sl_encolher = _slider_row(-100, 100, 0)
+        suav_row, self.sl_suavizar = _slider_row(0, 100, 20)
+        f2.addRow("Afinar (+) / engordar (−)", enc_row)
+        f2.addRow("Suavizar borda", suav_row)
         self.chk_decont = QCheckBox("Descontaminar cor da borda")
         self.chk_decont.setChecked(True)
         f2.addRow(self.chk_decont)
@@ -495,12 +510,12 @@ class BackgroundPanel(QWidget):
         row = QHBoxLayout()
         row.addWidget(self.rb_cor)
         row.addWidget(self.btn_color)
-        self.sl_blur = _slider(1, 100, 50)
+        blur_row, self.sl_blur = _slider_row(1, 100, 50)
         self.sl_blur.setEnabled(False)
         f2.addRow(self.rb_transp)
         f2.addRow(row)
         f2.addRow(self.rb_blur)
-        f2.addRow("Intensidade do desfoque", self.sl_blur)
+        f2.addRow("Intensidade do desfoque", blur_row)
         lay.addWidget(self.g2)
 
         lay.addWidget(_hint(
@@ -622,16 +637,16 @@ class FacesPanel(QWidget):
         for k, label in BLUR_TYPES.items():
             self.cmb_tipo.addItem(label, k)
         self.cmb_tipo.setCurrentIndex(self.cmb_tipo.findData("mosaico"))
-        self.sl_int = _slider(1, 100, 70)
-        self.sl_sens = _slider(0, 100, 60)
-        self.sl_margem = _slider(0, 200, 30)
+        int_row, self.sl_int = _slider_row(1, 100, 70)
+        sens_row, self.sl_sens = _slider_row(0, 100, 60)
+        margem_row, self.sl_margem = _slider_row(0, 200, 30)
         self.btn_color = QPushButton()
         self._color = "#000000"
         self._paint_color_button()
         f2.addRow("Tipo", self.cmb_tipo)
-        f2.addRow("Intensidade", self.sl_int)
-        f2.addRow("Sensibilidade", self.sl_sens)
-        f2.addRow("Margem extra", self.sl_margem)
+        f2.addRow("Intensidade", int_row)
+        f2.addRow("Sensibilidade", sens_row)
+        f2.addRow("Margem extra", margem_row)
         f2.addRow("Cor da tarja", self.btn_color)
         lay.addWidget(self.g2)
         lay.addWidget(_hint(
@@ -713,7 +728,7 @@ class FacesPanel(QWidget):
 # ============================================================== Marca d'água
 
 class WatermarkPanel(QWidget):
-    """Marcar a área (pincel/retângulo) → escolher método → remover."""
+    """Marcar a área (pincel/retângulo/clique) → escolher método → remover."""
     settingsChanged = pyqtSignal()
     clearRequested = pyqtSignal()
     applyRequested = pyqtSignal(dict)
@@ -730,10 +745,12 @@ class WatermarkPanel(QWidget):
         g1 = QGroupBox("1. Marque a área a apagar")
         f1 = QVBoxLayout(g1)
         self.grp_tool = QButtonGroup(self)
-        for i, (key, text) in enumerate((("pincel", "Pincel (pinte sobre a marca)"),
-                                         ("retangulo", "Retângulo (arraste)"),
-                                         ("clique", "Clique no objeto (MobileSAM; Alt+clique tira)"))):
+        for i, (key, text, tip) in enumerate((
+                ("pincel", "Pincel", "Pinte sobre a marca d'água."),
+                ("retangulo", "Retângulo", "Arraste um retângulo em volta da marca."),
+                ("clique", "Clique no objeto (MobileSAM)", "Clique no objeto; Alt+clique ou botão direito tira da marcação."))):
             rb = QRadioButton(text)
+            rb.setToolTip(tip)
             rb.setProperty("key", key)
             self.grp_tool.addButton(rb, i)
             f1.addWidget(rb)
@@ -752,18 +769,18 @@ class WatermarkPanel(QWidget):
         f1.addWidget(self.btn_clear)
         lay.addWidget(g1)
 
-        g1b = QGroupBox("Ajuste automático aos traços da marca")
+        g1b = QGroupBox("Ajuste aos traços da marca")
         f1b = QFormLayout(g1b)
         self.cmb_pol = QComboBox()
         for k, label in POLARITIES.items():
             self.cmb_pol.addItem(label, k)
-        self.sl_sens = _slider(0, 100, 40)
+        sens_row, self.sl_sens = _slider_row(0, 100, 40)
         self.btn_snap = QPushButton("Apertar marcação aos traços")
         self.btn_snap.setToolTip("Marque a área de forma solta (retângulo ou pincel largo) e clique aqui: "
                                  "a marcação encolhe para cobrir só as letras/traços da marca.")
         self.btn_snap_undo = QPushButton("Voltar à marcação anterior")
         f1b.addRow("A marca é", self.cmb_pol)
-        f1b.addRow("Sensibilidade", self.sl_sens)
+        f1b.addRow("Sensibilidade", sens_row)
         f1b.addRow(self.btn_snap)
         f1b.addRow(self.btn_snap_undo)
         lay.addWidget(g1b)
@@ -776,17 +793,33 @@ class WatermarkPanel(QWidget):
         self.lbl_model = QLabel()
         self.lbl_model.setObjectName("hint")
         self.btn_download = QPushButton("Baixar modelo LaMa (~200 MB)…")
-        self.sl_expandir = _slider(0, 100, 30)
-        self.sl_raio = _slider(1, 100, 50)
+        exp_row, self.sl_expandir = _slider_row(0, 100, 30)
+        raio_row, self.sl_raio = _slider_row(1, 100, 50)
+        ctx_row, self.sl_contexto = _slider_row(0, 100, 40)
+        emenda_row, self.sl_emenda = _slider_row(0, 100, 20)
+        grao_row, self.sl_grao = _slider_row(0, 200, 100, "%")
+        self.sl_contexto.setToolTip("LaMa: quanto da vizinhança a IA enxerga. Mais contexto = emenda mais "
+                                    "coerente, porém mais janelas (mais lento).")
+        self.sl_raio.setToolTip("Telea / Navier-Stokes: alcance do preenchimento a partir das bordas.")
+        self.sl_emenda.setToolTip("Suavidade da borda onde o trecho preenchido encontra a foto.")
+        self.sl_grao.setToolTip("Quanto do grão da foto ao redor é recolocado no trecho preenchido (0 = nenhum).")
         f2.addRow("Método", self.cmb_metodo)
         f2.addRow(self.lbl_model)
         f2.addRow(self.btn_download)
-        self.chk_grao = QCheckBox("Recolocar o grão da foto no trecho preenchido")
-        self.chk_grao.setChecked(True)
-        f2.addRow("Expandir a marcação", self.sl_expandir)
-        f2.addRow("Raio (métodos rápidos)", self.sl_raio)
-        f2.addRow(self.chk_grao)
+        f2.addRow("Expandir a marcação", exp_row)
+        self.lbl_raio = QLabel("Raio (rápidos)")
+        self.lbl_ctx = QLabel("Contexto (LaMa)")
+        f2.addRow(self.lbl_raio, raio_row)
+        f2.addRow(self.lbl_ctx, ctx_row)
+        f2.addRow("Suavizar a emenda", emenda_row)
+        f2.addRow("Grão da foto", grao_row)
         lay.addWidget(g2)
+
+        btns = QHBoxLayout()
+        self.btn_apply = QPushButton("Remover marca d'água")
+        self.btn_apply.setObjectName("primary")
+        btns.addWidget(self.btn_apply)
+        lay.addLayout(btns)
 
         g3 = QGroupBox("3. Para várias fotos (lote)")
         f3 = QVBoxLayout(g3)
@@ -795,7 +828,7 @@ class WatermarkPanel(QWidget):
                                      "No lote: passo \"Remover marca d'água (modelo de máscara)\".")
         self.lbl_tpl = QLabel("")
         self.lbl_tpl.setObjectName("hint")
-        self.btn_learn = QPushButton("Aprender marca translúcida de uma pasta…")
+        self.btn_learn = QPushButton("Aprender marca de uma pasta…")
         self.btn_learn.setToolTip("Para marca branca/preta translúcida na mesma posição em muitas fotos: "
                                   "estima a opacidade e desfaz sem inventar textura.")
         for w in (self.btn_save_tpl, self.lbl_tpl, self.btn_learn):
@@ -803,18 +836,11 @@ class WatermarkPanel(QWidget):
         lay.addWidget(g3)
 
         lay.addWidget(_hint(
-            "Marque um pouco além da marca d'água; \"Expandir\" cobre as bordas suaves. "
-            "Rápido funciona bem em fundos lisos; LaMa é melhor em texturas e áreas grandes. "
-            "Se a marca é toda a mesma posição, um único retângulo entra na receita e no lote. "
-            "Remover marca d'água de imagens de terceiros pode violar direitos autorais: "
-            "use em fotos suas ou com autorização."
+            "Marque um pouco além da marca; \"Expandir\" cobre as bordas suaves. Rápido funciona bem em "
+            "fundos lisos; LaMa é melhor em texturas e áreas grandes. Um único retângulo ou um modelo salvo "
+            "entra na receita e no lote. Use só em fotos suas ou com autorização: remover marca d'água de "
+            "imagens de terceiros pode violar direitos autorais."
         ))
-        btns = QHBoxLayout()
-        self.btn_apply = QPushButton("Remover")
-        self.btn_apply.setObjectName("primary")
-        btns.addStretch()
-        btns.addWidget(self.btn_apply)
-        lay.addLayout(btns)
         lay.addStretch()
 
         self.grp_tool.idToggled.connect(lambda _id, on: on and self.settingsChanged.emit())
@@ -844,8 +870,9 @@ class WatermarkPanel(QWidget):
     def values(self) -> dict:
         """Parâmetros comuns do step 'remover_marca_regiao' (sem o retângulo)."""
         return {"metodo": self.metodo(), "expandir": self.sl_expandir.value(),
-                "raio": self.sl_raio.value(),
-                "grao": self.chk_grao.isChecked()}
+                "raio": self.sl_raio.value(), "contexto": self.sl_contexto.value(),
+                "emenda": self.sl_emenda.value(),
+                "grao": self.sl_grao.value() > 0, "grao_forca": self.sl_grao.value()}
 
     def refresh_model_status(self) -> None:
         lama = self.metodo() == "lama"
@@ -853,7 +880,11 @@ class WatermarkPanel(QWidget):
         self.lbl_model.setVisible(lama)
         self.lbl_model.setText("✓ Modelo LaMa baixado" if ok else "Modelo LaMa ainda não baixado")
         self.btn_download.setVisible(lama and not ok)
-        self.sl_raio.setEnabled(not lama)
+        # cada método mostra só os controles que valem para ele
+        self.lbl_raio.setVisible(not lama)
+        self.sl_raio.parentWidget().setVisible(not lama)
+        self.lbl_ctx.setVisible(lama)
+        self.sl_contexto.parentWidget().setVisible(lama)
 
     def set_marked(self, count: int) -> None:
         self.lbl_marked.setText("Nada marcado ainda." if count == 0

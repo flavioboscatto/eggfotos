@@ -197,3 +197,51 @@ def test_snap_polarity_and_validation():
     low = inpaint.snap_to_strokes(marked, loose, sensibilidade=0).sum()
     high = inpaint.snap_to_strokes(marked, loose, sensibilidade=100).sum()
     assert high >= low
+
+
+# ------------------------------------------- controles do preenchimento (LaMa etc.)
+
+def test_grain_strength_scales_the_noise():
+    rng = np.random.default_rng(1)
+    base = np.clip(120 + rng.normal(0, 6, (300, 400, 3)), 0, 255).astype(np.uint8)
+    mask = inpaint.rect_mask(base.shape, 0.3, 0.3, 0.4, 0.3)
+    region = inpaint.grow_mask(mask, 0) > 0
+    gray = lambda im: inpaint._noise_std(inpaint.cv2.cvtColor(im, inpaint.cv2.COLOR_RGB2GRAY), region)
+    none = inpaint.remove_with_mask(base, mask, "telea", grao_forca=0)
+    normal = inpaint.remove_with_mask(base, mask, "telea", grao_forca=100)
+    double = inpaint.remove_with_mask(base, mask, "telea", grao_forca=200)
+    assert gray(none) < gray(normal) < gray(double)
+    assert np.array_equal(none, inpaint.remove_with_mask(base, mask, "telea", grao=False))
+
+
+def test_seam_smoothing_controls_the_edge():
+    base = np.random.default_rng(2).integers(80, 120, (300, 400, 3), dtype=np.uint8)
+    mask = inpaint.rect_mask(base.shape, 0.4, 0.4, 0.2, 0.2)
+    filled = np.full_like(base, 250)
+    hard = inpaint._composite(base, filled, mask, emenda=0)
+    soft = inpaint._composite(base, filled, mask, emenda=100)
+    y, x = 120, 158                                    # logo fora da borda esquerda da máscara
+    assert np.array_equal(hard[y, x], base[y, x])      # emenda 0: corte seco, nada vaza para fora
+    assert soft[y, x].mean() > base[y, x].mean() + 1   # emenda 100: a borda se mistura para fora
+    assert np.all(soft[150, 200] == 250) and np.all(hard[150, 200] == 250)   # dentro: sempre cobre a marca
+
+
+def test_lama_context_changes_the_window_layout(monkeypatch):
+    big = np.full((1600, 2400, 3), 150, np.uint8)
+    mask = np.zeros(big.shape[:2], np.uint8)
+    mask[400:560, 300:1700] = 255
+    n = {}
+    for ctx in (0, 100):
+        calls = []
+        monkeypatch.setattr(inpaint, "_lama_run", lambda rgb, m, c=calls: (c.append(1), np.full_like(rgb, 90))[1])
+        inpaint.remove_with_mask(big, mask, "lama", expandir=0, grao=False, contexto=ctx)
+        n[ctx] = len(calls)
+    assert n[100] > n[0]            # mais contexto = menos área útil por janela = mais janelas
+
+
+def test_new_params_in_operations(rgb, marks_tmp):
+    for key in ("remover_marca_regiao", "remover_marca_modelo"):
+        names = {p.name for p in ops.get_operation(key).params}
+        assert {"contexto", "emenda", "grao_forca", "grao"} <= names
+    old = ops.normalize_step({"op": "remover_marca_regiao", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "grao": False})
+    assert old["grao"] is False and old["grao_forca"] == 100 and old["contexto"] == 40   # receita antiga continua válida

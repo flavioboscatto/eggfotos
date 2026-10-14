@@ -139,10 +139,14 @@ def remove_with_template(
     expandir: float = 30,
     raio: float = 50,
     grao: bool = True,
+    contexto: float = 40,
+    emenda: float = 20,
+    grao_forca: float = 100,
 ) -> np.ndarray:
     """Remove a marca (modelo de máscara ancorada) de qualquer foto — usado pelo lote."""
     t = load_mask_template(nome)
-    return inpaint.remove_with_mask(img, place_mask(t, img.shape), metodo, expandir, raio, grao)
+    return inpaint.remove_with_mask(img, place_mask(t, img.shape), metodo, expandir, raio, grao,
+                                    contexto, emenda, grao_forca)
 
 
 # =============================================================== alpha estimado

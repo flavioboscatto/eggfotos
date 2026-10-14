@@ -37,7 +37,8 @@ eggfotos/
     inpaint.py             remover marca d'água: remove_with_mask (telea/ns via cv2.inpaint, lama via ONNX),
                            remove_region (retângulo relativo, vai pro lote); só processa a região da máscara.
                            LaMa roda em janelas de 512 px REAIS (até 12; marcas enormes caem no método reduzido)
-                           e restore_grain recoloca o grão do entorno (semente fixa, parâmetro `grao`).
+                           e restore_grain recoloca o grão do entorno (semente fixa; `grao`/`grao_forca`). Controles do preenchimento:
+                           `expandir`, `raio` (Telea/NS), `contexto` (LaMa, 48–168 px), `emenda` (borda da colagem).
                            snap_to_strokes: aperta uma marcação solta nos traços da marca (fundo por mediana,
                            diferença relativa ao brilho; polaridade clara/escura/auto); só edição manual
     watermark.py           modelos de marca em ~/.eggfotos/marcas (env EGGFOTOS_MARCAS substitui):
@@ -59,6 +60,8 @@ eggfotos/
   ui/                      PyQt6 — só monta parâmetros e chama core/pipeline
     main_window.py         janela, menus, prévias, commit no histórico
     canvas.py              QGraphicsView: zoom, recorte, pincel, região, clique (TOOL_POINT, Alt/direito = "fora")
+    tool_tabs.py           ToolTabs: botões em grade + QStackedWidget; cada painel dentro de QScrollArea (só rola na
+                           vertical) e `compact()` (margens/espaços menores, formulários que quebram rótulos longos)
     panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Ocultar rosto, Marca d'água, ResizeDialog
     color_picker.py        paleta de cores (amostras + RGB + "Mais cores…"), usada em todos os botões de cor
     batch_dialog.py        diálogo de lote + StepEditor gerado a partir dos Params
@@ -109,6 +112,9 @@ tests/                     pytest do core e do pipeline
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
 - Seleção por cliques (MobileSAM) não é reproduzível em lote por si só: entra no histórico sem step (como o pincel), a menos que a marcação seja salva como modelo (aba Marca d'água), aí vira `remover_marca_modelo`.
 - Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
+- Barra lateral: largura inicial 400 px, redimensionável e lembrada (`saveState`); `_slider_row` mostra o valor ao lado
+  do slider. Painel novo: use `ToolTabs.addTab` (aplica `compact`) e confira que `minimumSizeHint().width()` cabe
+  em ~330 px (há teste em tests/test_ui_layout.py).
 - Zoom: roda do mouse = zoom; trackpad com dois dedos = mover; pinça ou Cmd+rolagem = zoom; teclas +/−;
   botões na barra de status. Detecção automática de marca em UMA foto não existe de forma confiável:
   o que há é "apertar aos traços" (assistido) e "aprender de uma pasta" (marca repetida).

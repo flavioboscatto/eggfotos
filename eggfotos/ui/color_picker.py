@@ -19,7 +19,8 @@ def style_color_button(btn: QPushButton, color: str) -> None:
     """Pinta o botão com a cor e mostra o valor RGB, com texto legível sobre ela."""
     c = QColor(color)
     fg = "#000000" if c.lightness() > 140 else "#ffffff"
-    btn.setText(f"{color.upper()}  ·  RGB {c.red()}, {c.green()}, {c.blue()}")
+    btn.setText(color.upper())
+    btn.setToolTip(f"RGB {c.red()}, {c.green()}, {c.blue()} — clique para escolher outra cor")
     btn.setStyleSheet(f"background: {color}; color: {fg};")
 
 

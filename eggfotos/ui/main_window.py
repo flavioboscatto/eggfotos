@@ -10,7 +10,7 @@ from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
-    QProgressDialog, QStyle, QTabWidget, QToolButton,
+    QProgressDialog, QStyle, QToolButton,
 )
 
 from .. import APP_NAME, __version__
@@ -23,6 +23,7 @@ from ..pipeline.operations import apply_step, get_operation
 from ..pipeline.recipe import Recipe, recipes_dir, safe_filename
 from .batch_dialog import BatchDialog
 from .canvas import TOOL_BRUSH, TOOL_CROP, TOOL_NAV, TOOL_POINT, TOOL_REGION, ImageCanvas
+from .tool_tabs import ToolTabs
 from .workers import TaskWorker
 from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, ResizeDialog, WatermarkPanel
 
@@ -83,6 +84,9 @@ class MainWindow(QMainWindow):
         geo = self.settings.value("geometry")
         if geo is not None:
             self.restoreGeometry(geo)
+        state = self.settings.value("state")  # posição e largura da barra de ferramentas
+        if state is not None:
+            self.restoreState(state)
         self._update_state()
 
     # ================================================================ montagem
@@ -94,9 +98,9 @@ class MainWindow(QMainWindow):
         self.background_panel = BackgroundPanel()
         self.faces_panel = FacesPanel()
         self.wm_panel = WatermarkPanel()
-        self.tabs = QTabWidget()
+        self.tabs = ToolTabs()
         self.tabs.addTab(self.adjust_panel, "Ajustes")
-        self.tabs.addTab(self.filters_panel, "Filtros")
+        self.tabs.addTab(self.filters_panel, "Filtros", scroll=False)  # a grade de filtros já rola
         self.tabs.addTab(self.crop_panel, "Recortar")
         self.tabs.addTab(self.blur_panel, "Borrar")
         self.tabs.addTab(self.background_panel, "Fundo")
@@ -106,8 +110,10 @@ class MainWindow(QMainWindow):
         dock.setObjectName("dock_tools")
         dock.setWidget(self.tabs)
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        dock.setMinimumWidth(360)
+        dock.setMinimumWidth(330)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self.resizeDocks([dock], [400], Qt.Orientation.Horizontal)  # largura inicial; depois o usuário ajusta
+        self.dock_tools = dock
 
     def _action(self, text: str, slot, shortcut=None, icon=None, tip: str = "") -> QAction:
         a = QAction(text, self)
@@ -1314,4 +1320,5 @@ class MainWindow(QMainWindow):
         for t in list(self._zombies):  # espera as contas em segundo plano acabarem
             t.wait(15000)
         self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("state", self.saveState())
         super().closeEvent(event)
