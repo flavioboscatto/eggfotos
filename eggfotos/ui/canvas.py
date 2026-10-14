@@ -110,6 +110,7 @@ class ImageCanvas(QGraphicsView):
         self._pixmap_item.setPixmap(to_qpixmap(arr))
         self._pixmap_item.setScale(1.0)
         self._pixmap_item.setPos(0, 0)
+        self._checker_item.setVisible(True)
         size_changed = self._image_size != (w, h)
         self._image_size = (w, h)
         self._scene.setSceneRect(QRectF(0, 0, w, h))
@@ -129,6 +130,7 @@ class ImageCanvas(QGraphicsView):
             return
         self._pixmap_item.setPixmap(to_qpixmap(arr))
         self._pixmap_item.setScale(scale)
+        self._checker_item.setVisible(not centered)  # prévia menor que a foto: fundo liso, sem xadrez
         if centered:
             W, H = self._image_size
             w, h = arr.shape[1] * scale, arr.shape[0] * scale

@@ -18,21 +18,26 @@ class ThumbnailWorker(QThread):
     """Gera a miniatura de cada filtro para o painel de filtros."""
     thumbReady = pyqtSignal(int, str, object)  # geração, chave, array
 
-    def __init__(self, source: np.ndarray, generation: int, parent=None):
+    def __init__(self, source: np.ndarray, generation: int, parent=None,
+                 keys: list[str] | None = None, render: Callable[[np.ndarray, str], np.ndarray] | None = None):
+        """Sem `keys`/`render`: miniaturas dos filtros. Com eles: qualquer lista (ex.: molduras)."""
         super().__init__(parent)
         self._source = source
         self._generation = generation
+        self._keys = keys
+        self._render = render
         self._stop = False
 
     def stop(self) -> None:
         self._stop = True
 
     def run(self) -> None:
-        for key in filter_keys():
+        for key in (self._keys if self._keys is not None else filter_keys()):
             if self._stop:
                 return
             try:
-                out = apply_filter(self._source, key, 100)
+                out = (self._render(self._source, key) if self._render is not None
+                       else apply_filter(self._source, key, 100))
             except Exception:  # noqa: BLE001 — miniatura com erro fica em branco
                 continue
             self.thumbReady.emit(self._generation, key, out)

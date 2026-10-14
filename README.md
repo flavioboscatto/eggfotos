@@ -38,7 +38,7 @@ pytest -q
 
 Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`).
 
-## O que já funciona (fases 1 a 8)
+## O que já funciona (fases 1 a 8 + molduras)
 
 | Área | Recursos |
 |---|---|
@@ -52,6 +52,7 @@ Os testes cobrem todo o núcleo (`eggfotos/core`) e o lote (`eggfotos/pipeline`)
 | Seleção por clique | Clique no objeto (MobileSAM) para escolher o que fica no Fundo, ou o que apagar na Marca d'água; Alt+clique / botão direito tira da seleção |
 | Ocultar rosto | Detecta rostos sozinho (YuNet) e aplica mosaico, embaçar ou tarja; sensibilidade e margem ajustáveis; entra no lote |
 | Marca d'água | **Perfis prontos** (fundo liso, texto fino, textura, perto de rostos…) e salve os seus. Marque com pincel, retângulo ou clique, **aperte a marcação aos traços da marca** (ajuste automático) e remova com preenchimento rápido (Telea/Navier-Stokes) ou por IA (LaMa, modelo baixado sob demanda); um retângulo fixo entra no lote. **Em lote:** salve a marcação como modelo (ancorada ao canto, escala com a largura) ou aprenda uma marca translúcida repetida de uma pasta de fotos |
+| Molduras | 15 molduras com miniatura da sua foto: borda, passe-partout, Polaroid, galeria, cartão com sombra, fita, álbum antigo, barras de cinema, **rolo de filme 35 mm, negativo colorido, slide, Super 8, filmadora VHS (REC/PLAY/data) e TV de tubo**; espessura, cor e legenda; entra no lote |
 | Histórico | Desfazer / refazer (Ctrl+Z / Ctrl+Y), botão "Original" (clique para ver a foto original, clique de novo para voltar) |
 | Lote | Pasta de entrada (com subpastas), receita de passos, prévia em 3 fotos, formato de saída, sufixo, processos paralelos, pular já processadas, log CSV |
 | Receitas | "Editar → Salvar edições como receita" transforma o que você fez na foto aberta numa receita para o lote |

@@ -25,10 +25,10 @@ from .batch_dialog import BatchDialog
 from .canvas import TOOL_BRUSH, TOOL_CROP, TOOL_NAV, TOOL_POINT, TOOL_REGION, ImageCanvas
 from .tool_tabs import ToolTabs
 from .workers import TaskWorker
-from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, ResizeDialog, WatermarkPanel
+from .panels import AdjustPanel, BackgroundPanel, BlurPanel, CropPanel, FacesPanel, FiltersPanel, FramesPanel, ResizeDialog, WatermarkPanel
 
 PROXY_MAX = 1800  # lado maior da cópia reduzida usada nas prévias ao vivo
-TAB_ADJUST, TAB_FILTERS, TAB_CROP, TAB_BLUR, TAB_BACKGROUND, TAB_FACES, TAB_WATERMARK = range(7)
+TAB_ADJUST, TAB_FILTERS, TAB_CROP, TAB_BLUR, TAB_BACKGROUND, TAB_FACES, TAB_WATERMARK, TAB_FRAMES = range(8)
 SAVE_FILTER = "JPG (*.jpg);;PNG (*.png);;WEBP (*.webp);;TIFF (*.tif)"
 
 
@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._overwrite_confirmed = False
         self._pending: Callable[[], None] | None = None  # prévia ativa (refaz ao soltar "Original")
         self._thumbs_stale = True  # miniaturas de filtro precisam ser regeradas
+        self._frame_thumbs_stale = True  # idem para as molduras
         self._matte: np.ndarray | None = None  # máscara do "Fundo" (resolução total)
         self._matte_key: tuple[int | None, str] | None = None  # (uid do histórico, modelo)
         self._proxy_matte: np.ndarray | None = None
@@ -98,6 +99,7 @@ class MainWindow(QMainWindow):
         self.background_panel = BackgroundPanel()
         self.faces_panel = FacesPanel()
         self.wm_panel = WatermarkPanel()
+        self.frames_panel = FramesPanel()
         self.tabs = ToolTabs()
         self.tabs.addTab(self.adjust_panel, "Ajustes")
         self.tabs.addTab(self.filters_panel, "Filtros", scroll=False)  # a grade de filtros já rola
@@ -106,6 +108,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.background_panel, "Fundo")
         self.tabs.addTab(self.faces_panel, "Ocultar rosto")
         self.tabs.addTab(self.wm_panel, "Marca d'água")
+        self.tabs.addTab(self.frames_panel, "Molduras", scroll=False)  # a grade de molduras já rola
         dock = QDockWidget("Ferramentas", self)
         dock.setObjectName("dock_tools")
         dock.setWidget(self.tabs)
@@ -246,6 +249,11 @@ class MainWindow(QMainWindow):
         fp.applyRequested.connect(self._apply_faces)
         fp.cancelRequested.connect(self._cancel_preview)
 
+        fr = self.frames_panel
+        fr.previewChanged.connect(self._preview_frame)
+        fr.applyRequested.connect(self._apply_frame)
+        fr.cancelRequested.connect(self._cancel_preview)
+
         wp = self.wm_panel
         wp.settingsChanged.connect(self._sync_wm_tool)
         wp.clearRequested.connect(self._wm_clear)
@@ -294,10 +302,16 @@ class MainWindow(QMainWindow):
         self.faces_panel.reset()
         self._wm_reset()
         self._sam_reset()
+        self.frames_panel.reset()
         if self.tabs.currentIndex() == TAB_FILTERS:
             self.filters_panel.set_source(img)
         else:
             self._thumbs_stale = True
+        if self.tabs.currentIndex() == TAB_FRAMES:
+            self.frames_panel.set_source(img)
+            self._frame_thumbs_stale = False
+        else:
+            self._frame_thumbs_stale = True
         self._update_state()
 
     def commit(self, new_img: np.ndarray, label: str, step: dict | None = None) -> None:
@@ -377,6 +391,7 @@ class MainWindow(QMainWindow):
         self._refresh_undo_actions()
         self.adjust_panel.reset()
         self.filters_panel.reset()
+        self.frames_panel.reset()
         self.crop_panel.reset_angle()
         if idx == TAB_BACKGROUND:
             self.background_panel.refresh_model_status()
@@ -387,6 +402,9 @@ class MainWindow(QMainWindow):
         if idx == TAB_FILTERS and self._thumbs_stale and self.image is not None:
             self.filters_panel.set_source(self.image)
             self._thumbs_stale = False
+        if idx == TAB_FRAMES and self._frame_thumbs_stale and self.image is not None:
+            self.frames_panel.set_source(self.image)
+            self._frame_thumbs_stale = False
         if idx == TAB_CROP:
             self.canvas.set_tool(TOOL_CROP)
             self._on_ratio(self.crop_panel.ratio_key())
@@ -413,6 +431,28 @@ class MainWindow(QMainWindow):
         from ..core.filters import filter_label
         self._apply_op({"op": "filtro", "nome": key, "intensidade": intensity},
                        f"Filtro {filter_label(key)}")
+
+    # ============================================================ molduras
+    def _frame_step(self, values: dict) -> dict:
+        return {"op": "moldura", **values}
+
+    def _preview_frame(self, values: dict) -> None:
+        if self.image is None or self._working:
+            return
+        step = self._frame_step(values)
+
+        def render():
+            out = apply_step(self.proxy, step)
+            H, W = self.image.shape[:2]
+            # a moldura pode ser maior que a foto: encolhe a prévia para caber, centralizada
+            s = min(1.0 / self.proxy_scale, W / out.shape[1], H / out.shape[0])
+            self.canvas.set_preview(out, s, centered=True)
+        self._run_preview(render)
+
+    def _apply_frame(self, values: dict) -> None:
+        from ..core.frames import frame_label
+        self._apply_op(self._frame_step(values), f"Moldura {frame_label(values['nome'])}")
+
 
     # ============================================================= recorte
     def _on_ratio(self, key: str) -> None:
@@ -1208,6 +1248,7 @@ class MainWindow(QMainWindow):
         self._saved_uid = self.history.current_uid
         self._overwrite_confirmed = False
         self._thumbs_stale = True
+        self._frame_thumbs_stale = True
         self._set_working_image(img, reset_view=True)
         if self.tabs.currentIndex() == TAB_FILTERS:
             self.filters_panel.set_source(img)
@@ -1319,6 +1360,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.filters_panel.shutdown()
+        self.frames_panel.shutdown()
         for t in list(self._zombies):  # espera as contas em segundo plano acabarem
             t.wait(15000)
         self.settings.setValue("geometry", self.saveGeometry())

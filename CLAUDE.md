@@ -31,6 +31,9 @@ eggfotos/
     imgutils.py            split/merge alpha, sigma relativo, unsharp, vinheta
     adjustments.py         adjust(img, exposicao=…, brilho=…, …)  valores −100..100 (exceto `ruido`: 0..100,
                            ADJUSTMENT_RANGES); denoise = NLM na luminância + suavização do croma
+    frames.py              molduras (15): registro FRAMES + apply_frame(img, nome, espessura, cor, cor_padrao, texto);
+                           papel/galeria, cinema/filme (rolo 35 mm, negativo, slide, Super 8) e eletrônicos (VHS, TV);
+                           tamanhos relativos ao menor lado; aumentam a foto (exceto VHS); saída RGB opaca
     filters.py             registro FILTERS (28, incl. 10 vintage); apply_filter(img, nome, intensidade)
                            auxiliares vintage: _grain, _curves, _duotone, _dust
     background.py          remover fundo: compute_matte (rembg/ONNX) → apply_matte (refino,
@@ -66,7 +69,7 @@ eggfotos/
     canvas.py              QGraphicsView: zoom, recorte, pincel, região, clique (TOOL_POINT, Alt/direito = "fora")
     tool_tabs.py           ToolTabs: botões em grade + QStackedWidget; cada painel dentro de QScrollArea (só rola na
                            vertical) e `compact()` (margens/espaços menores, formulários que quebram rótulos longos)
-    panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Ocultar rosto, Marca d'água, ResizeDialog
+    panels.py              Ajustes, Filtros (miniaturas), Recortar, Borrar, Fundo, Ocultar rosto, Marca d'água, Molduras, ResizeDialog
     color_picker.py        paleta de cores (amostras + RGB + "Mais cores…"), usada em todos os botões de cor
     batch_dialog.py        diálogo de lote + StepEditor gerado a partir dos Params
     workers.py             QThreads (miniaturas, prévia do lote, lote, TaskWorker genérico)
@@ -116,6 +119,8 @@ tests/                     pytest do core e do pipeline
 - Remover granulação: o ruído é em pixels reais, então a prévia (cópia reduzida) parece mais limpa que o resultado; conferir em 100%.
 - Seleção por cliques (MobileSAM) não é reproduzível em lote por si só: entra no histórico sem step (como o pincel), a menos que a marcação seja salva como modelo (aba Marca d'água), aí vira `remover_marca_modelo`.
 - Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
+- Molduras: nova moldura = função `(rgb, e, cor, texto) -> rgb` com `@_register(...)` em `core/frames.py`; aparece
+  sozinha na aba (miniatura da foto) e no lote. Prévia da aba usa `set_preview(centered=True)` encolhido para caber.
 - Perfis da Marca d'água: valores iniciais, não regras; mexer em qualquer controle volta para "Personalizado".
   Novo perfil pronto = uma linha em `presets.PRESETS` (o teste valida faixas e se a receita aceita).
 - Barra lateral: largura inicial 400 px, redimensionável e lembrada (`saveState`); `_slider_row` mostra o valor ao lado
@@ -139,6 +144,7 @@ tests/                     pytest do core e do pipeline
 | 5 | Desfoque de fundo (opção na aba Fundo, reusa `compute_matte`) e desfoque automático de rostos (aba **Ocultar rosto**, YuNet ~230 KB, ops `desfocar_fundo` e `desfocar_rostos`) | feito, falta testar com foto real |
 | 6 | Marca d'água: aba **Marca d'água** (pincel/retângulo/clique acumulam uma máscara), Telea/Navier-Stokes sem modelo e LaMa (ONNX ~200 MB, baixado sob demanda); op `remover_marca_regiao` (1 retângulo) no lote | feito e testado com o modelo real |
 | 7 | MobileSAM: seleção por cliques na aba **Fundo** (alternativa à detecção automática; vira a máscara do fundo) e ferramenta "Clique" na aba **Marca d'água** | feito e testado com o modelo real |
+| — | Molduras (15, estilo papel, cinema, filme, filmadora) com aba própria e operação `moldura` no lote | feito |
 | 8 | Marca d'água em lote: modelo de máscara ancorada (`remover_marca_modelo`) e marca translúcida aprendida de uma pasta (`remover_marca_estimada`, inversão de alpha); `Operation.check` valida modelos antes do lote | feito; testado com marcas sintéticas, falta testar com marcas reais |
 | 9 | (Opcional) inpainting por difusão com GPU (torch, diffusers) | — |
 

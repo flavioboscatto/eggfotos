@@ -1,12 +1,13 @@
-"""Painéis laterais: Ajustes, Filtros (com miniaturas), Recortar e girar, Borrar."""
+"""Painéis laterais: Ajustes, Filtros e Molduras (com miniaturas), Recortar, Borrar, Fundo, Rostos, Marca d'água."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QInputDialog, QMessageBox,
-    QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListView, QListWidget,
+    QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget,
     QListWidgetItem, QPushButton, QRadioButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -19,6 +20,7 @@ from ..core.inpaint import METHODS as INPAINT_METHODS
 from ..core.inpaint import POLARITIES
 from ..core.blur import BLUR_TYPES
 from ..core.filters import filter_keys, filter_label
+from ..core.frames import FRAMES, apply_frame, frame_keys
 from ..core.geometry import RATIO_CHOICES, downscale
 from .color_picker import choose_color, style_color_button
 from .qt_utils import debounce, to_qpixmap
@@ -1009,6 +1011,197 @@ class WatermarkPanel(QWidget):
 
     def set_template_name(self, nome: str | None) -> None:
         self.lbl_tpl.setText(f"Modelo salvo: {nome}" if nome else "")
+
+
+# ================================================================== Molduras
+
+class FramesPanel(QWidget):
+    """Molduras com miniatura da própria foto, espessura, cor e legenda (prévia ao vivo)."""
+    previewChanged = pyqtSignal(dict)
+    applyRequested = pyqtSignal(dict)
+    cancelRequested = pyqtSignal()
+
+    THUMB = 104
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        self.list = QListWidget()
+        self.list.setViewMode(QListView.ViewMode.IconMode)
+        self.list.setIconSize(QSize(self.THUMB, self.THUMB))
+        self.list.setGridSize(QSize(self.THUMB + 16, self.THUMB + 40))
+        self.list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.list.setMovement(QListView.Movement.Static)
+        self.list.setUniformItemSizes(True)
+        self.list.setWordWrap(True)
+        self.list.setSpacing(4)
+        self.list.setMinimumHeight(190)
+        blank = QPixmap(self.THUMB, self.THUMB)
+        blank.fill(QColor("#2d2d33"))
+        self._items: dict[str, QListWidgetItem] = {}
+        for key in frame_keys():
+            item = QListWidgetItem(QIcon(blank), FRAMES[key].label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setToolTip(f"{FRAMES[key].group}: {FRAMES[key].descricao}")
+            self.list.addItem(item)
+            self._items[key] = item
+        lay.addWidget(self.list, 1)
+
+        self.lbl_desc = QLabel("Escolha uma moldura.")
+        self.lbl_desc.setObjectName("hint")
+        self.lbl_desc.setWordWrap(True)
+        lay.addWidget(self.lbl_desc)
+
+        form = QFormLayout()
+        esp_row, self.slider = _slider_row(0, 100, 50)
+        self.slider.setToolTip("Espessura da borda ou intensidade do efeito. 50 = padrão da moldura.")
+        form.addRow("Espessura", esp_row)
+        self.btn_color = QPushButton()
+        self._color = "#ffffff"
+        style_color_button(self.btn_color, self._color)
+        self.chk_default_color = QCheckBox("Cor própria da moldura")
+        self.chk_default_color.setChecked(True)
+        self.lbl_cor = QLabel("Cor")
+        form.addRow(self.chk_default_color)
+        form.addRow(self.lbl_cor, self.btn_color)
+        self.edt_text = QLineEdit()
+        self.lbl_text = QLabel("Texto")
+        form.addRow(self.lbl_text, self.edt_text)
+        lay.addLayout(form)
+
+        btns = QHBoxLayout()
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_apply = QPushButton("Aplicar moldura")
+        self.btn_apply.setObjectName("primary")
+        btns.addWidget(self.btn_cancel)
+        btns.addStretch()
+        btns.addWidget(self.btn_apply)
+        lay.addLayout(btns)
+
+        self._timer = debounce(self, 60, self._emit_preview)
+        self.list.currentItemChanged.connect(lambda *_: self._on_select())
+        self.slider.valueChanged.connect(lambda _=0: self._timer.start())
+        self.chk_default_color.toggled.connect(lambda _: (self._sync(), self._timer.start()))
+        self.edt_text.textChanged.connect(lambda _: self._timer.start())
+        self.btn_color.clicked.connect(self._pick_color)
+        self.btn_apply.clicked.connect(self._on_apply)
+        self.btn_cancel.clicked.connect(self._on_cancel)
+        self._worker: ThumbnailWorker | None = None
+        self._generation = 0
+        self._sync()
+
+    # --------------------------------------------------------------- estado
+    def selected_key(self) -> str | None:
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def values(self) -> dict | None:
+        key = self.selected_key()
+        if not key:
+            return None
+        return {"nome": key, "espessura": self.slider.value(), "cor": self._color,
+                "cor_padrao": self.chk_default_color.isChecked() or FRAMES[key].cor_padrao is None,
+                "texto": self.edt_text.text().strip() if FRAMES[key].usa_texto else ""}
+
+    def _sync(self) -> None:
+        key = self.selected_key()
+        spec = FRAMES.get(key) if key else None
+        usa_cor = spec is not None and spec.cor_padrao is not None
+        self.chk_default_color.setVisible(usa_cor)
+        self.lbl_cor.setVisible(usa_cor)
+        self.btn_color.setVisible(usa_cor)
+        self.btn_color.setEnabled(usa_cor and not self.chk_default_color.isChecked())
+        usa_texto = spec is not None and spec.usa_texto
+        self.lbl_text.setVisible(usa_texto)
+        self.edt_text.setVisible(usa_texto)
+        self.edt_text.setPlaceholderText(spec.texto_dica if spec else "")
+        self.btn_apply.setEnabled(spec is not None)
+
+    def _on_select(self) -> None:
+        key = self.selected_key()
+        if key:
+            spec = FRAMES[key]
+            self.lbl_desc.setText(f"{spec.group} — {spec.descricao}")
+            self.slider.setValue(50)   # cada moldura volta ao seu tamanho padrão
+            self._timer.stop()         # (a prévia sai logo abaixo, sem esperar o debounce)
+        self._sync()
+        self._emit_preview()
+
+    def reset(self) -> None:
+        self._timer.stop()
+        self.list.blockSignals(True)
+        self.list.setCurrentRow(-1)
+        self.list.clearSelection()
+        self.list.blockSignals(False)
+        self.lbl_desc.setText("Escolha uma moldura.")
+        self._sync()
+
+    def _emit_preview(self) -> None:
+        v = self.values()
+        if v:
+            self.previewChanged.emit(v)
+
+    def _on_apply(self) -> None:
+        v = self.values()
+        if v:
+            self.applyRequested.emit(v)
+
+    def _on_cancel(self) -> None:
+        self.reset()
+        self.cancelRequested.emit()
+
+    def _pick_color(self) -> None:
+        c = choose_color(self, self._color, "Cor da moldura")
+        if c:
+            self._color = c
+            style_color_button(self.btn_color, c)
+            self.chk_default_color.setChecked(False)
+            self._timer.start()
+
+    # ----------------------------------------------------------- miniaturas
+    @staticmethod
+    def render_thumb(source: np.ndarray, key: str, size: int) -> np.ndarray:
+        """Moldura aplicada à miniatura, encaixada num quadrado `size` (fundo escuro)."""
+        framed = apply_frame(source, key)
+        h, w = framed.shape[:2]
+        s = size / max(h, w)
+        small = cv2.resize(framed, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA)
+        out = np.empty((size, size, 3), np.uint8)
+        out[...] = (35, 35, 40)
+        y0, x0 = (size - small.shape[0]) // 2, (size - small.shape[1]) // 2
+        out[y0:y0 + small.shape[0], x0:x0 + small.shape[1]] = small
+        return out
+
+    def set_source(self, img: np.ndarray | None) -> None:
+        """Regera as miniaturas a partir da foto atual (em segundo plano)."""
+        self._stop_worker()
+        self._generation += 1
+        if img is None:
+            return
+        dpr = max(1.0, self.devicePixelRatioF())
+        size = int(self.THUMB * dpr)
+        thumb, _ = downscale(img, int(300 * dpr))
+        thumb = np.ascontiguousarray(thumb)
+        self._worker = ThumbnailWorker(thumb, self._generation, self, keys=frame_keys(),
+                                       render=lambda src, k: self.render_thumb(src, k, size))
+        self._worker.thumbReady.connect(self._on_thumb)
+        self._worker.start()
+
+    def _on_thumb(self, generation: int, key: str, arr: np.ndarray) -> None:
+        if generation != self._generation or key not in self._items:
+            return
+        pm = to_qpixmap(arr)
+        pm.setDevicePixelRatio(max(1.0, self.devicePixelRatioF()))
+        self._items[key].setIcon(QIcon(pm))
+
+    def _stop_worker(self) -> None:
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker.wait(2000)
+            self._worker = None
+
+    def shutdown(self) -> None:
+        self._stop_worker()
 
 
 # ============================================================ Redimensionar

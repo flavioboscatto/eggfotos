@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core import adjustments, background, blur, faces, filters, geometry, inpaint, watermark
+from ..core import adjustments, background, blur, faces, filters, frames, geometry, inpaint, watermark
 
 
 @dataclass(frozen=True)
@@ -148,6 +148,8 @@ def describe_step(step: dict) -> str:
         return f"{op.label} — modelo '{s['nome']}', {inpaint.METHODS[s['metodo']].split(' (')[0]}"
     if k == "remover_marca_estimada":
         return f"{op.label} — modelo '{s['nome']}' ({s['forca']}%)"
+    if k == "moldura":
+        return f"{op.label} — {frames.frame_label(s['nome'])}"
     if k == "recortar_relativo":
         return f"{op.label} — {s['w'] * 100:.0f}% × {s['h'] * 100:.0f}%"
     return op.label
@@ -323,4 +325,18 @@ register(Operation(
     ),
     "Marca branca/preta translúcida repetida em várias fotos; exige a mesma proporção.",
     _check_template(watermark.KIND_ALPHA),
+))
+
+
+register(Operation(
+    "moldura", "Moldura", frames.apply_frame,
+    (
+        Param("nome", "Moldura", "choice", "polaroid",
+              choices=tuple((k, frames.frame_label(k)) for k in frames.frame_keys())),
+        Param("espessura", "Espessura / intensidade (50 = padrão)", "int", 50, 0, 100),
+        Param("cor_padrao", "Usar a cor própria da moldura", "bool", True),
+        Param("cor", "Cor (se não usar a padrão)", "color", "#ffffff"),
+        Param("texto", "Legenda / data / marca na borda", "str", ""),
+    ),
+    "Bordas e molduras de papel, cinema, filme e filmadora. O tamanho da foto aumenta nas molduras de borda.",
 ))
