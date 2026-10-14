@@ -22,6 +22,8 @@ Rode `pytest -q` depois de qualquer mudança em `eggfotos/core` ou `eggfotos/pip
 ## Arquitetura
 
 ```
+assets/icon, assets/logo     ícone do app (EggFotos.png/.ico/.icns + variantes claro/âmbar) e o logo original
+tools/gerar_icones.py      regenera os ícones a partir do logo (`--padrao ambar|claro` escolhe o ícone do programa)
 main.py                    entrada (freeze_support é obrigatório: o lote usa processos)
 eggfotos/
   core/                    processamento puro, SEM Qt

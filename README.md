@@ -22,6 +22,14 @@ python main.py
 python main.py "C:\caminho\foto.jpg"   # já abre uma foto
 ```
 
+## Ícone
+
+O ícone fica em `assets/icon` (macOS `.icns`, Windows `.ico` e PNGs) e é gerado a partir do logo:
+
+```bash
+python tools/gerar_icones.py --padrao ambar   # ou: claro
+```
+
 ## Testes
 
 ```powershell

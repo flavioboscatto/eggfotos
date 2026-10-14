@@ -5,9 +5,10 @@ import sys
 import traceback
 
 from PyQt6.QtCore import QLibraryInfo, QLocale, QTranslator
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from .. import APP_NAME
+from .. import APP_NAME, ICON_PATH
 from ..errors import friendly_error
 from .main_window import MainWindow
 from .styles import STYLESHEET
@@ -47,6 +48,8 @@ def run(argv: list[str]) -> int:
     app._translators = install_portuguese(app)  # noqa: SLF001 — mantém os tradutores vivos
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
+    if ICON_PATH.is_file():
+        app.setWindowIcon(QIcon(str(ICON_PATH)))  # janela e Dock
     app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)
     _install_excepthook()

@@ -7,13 +7,13 @@ from typing import Callable
 import numpy as np
 import cv2
 from PyQt6.QtCore import QSettings, Qt, QTimer
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
     QProgressDialog, QStyle, QToolButton,
 )
 
-from .. import APP_NAME, __version__
+from .. import APP_NAME, ICON_PATH, __version__
 from ..core import background, faces, geometry, inpaint, segment, watermark
 from ..core.blur import blur_with_mask
 from ..core.history import History
@@ -1296,11 +1296,13 @@ class MainWindow(QMainWindow):
 
     # ============================================================== outros
     def about(self) -> None:
-        QMessageBox.about(
-            self, APP_NAME,
-            f"<b>{APP_NAME}</b> {__version__}<br>Editor de fotos com processamento em lote.<br><br>"
-            "Uso pessoal.",
-        )
+        box = QMessageBox(self)
+        box.setWindowTitle(f"Sobre o {APP_NAME}")
+        box.setText(f"<b>{APP_NAME}</b> {__version__}<br>Editor de fotos com processamento em lote.<br><br>"
+                    "Uso pessoal.")
+        if ICON_PATH.is_file():
+            box.setIconPixmap(QIcon(str(ICON_PATH)).pixmap(96, 96))
+        box.exec()
 
     def dragEnterEvent(self, event):
         urls = event.mimeData().urls()
