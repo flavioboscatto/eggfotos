@@ -55,6 +55,17 @@ eggfotos/
     segment.py             MobileSAM (ONNX): embed(img) [~0,5 s, cacheável] → predict(emb, pontos) [instantâneo];
                            o encoder NÃO redimensiona: a foto vai com lado maior = 1024 e o decoder
                            recebe orig_im_size = tamanho real; pontos relativos, rótulo 1/0
+    objects.py             tipos de objeto (pessoas, veículos, prédios/casas, barcos, animais, aviões, árvores, céu,
+                           água, montanhas, ruas) com SegFormer ADE20K (ONNX, B0 15 MB / B2 110 MB):
+                           scan(img) → ObjectMap [cacheável] → select(img, manter, apagar, base, emb) = máscara alpha.
+                           Pessoas/veículos/barcos/animais/aviões (INSTANCE_KEYS) podem ser refinados com o MobileSAM
+                           (clique no centro de cada objeto; só vale com IoU≥0,55 e nunca come o miolo da máscara);
+                           "massas" (céu, árvores…) ficam com a máscara da rede. Entra como params `manter`/`apagar`/
+                           `objetos_modelo` em remover_fundo/desfocar_fundo (background.matte_for)
+    suggest.py             pré-análise SEM IA da marca d'água: suggest_settings(img, máscara) mede textura, grão,
+                           espessura dos traços, tamanho e rostos por perto → controles sugeridos + motivos;
+                           find_candidates(img) acha regiões de traços finos (top-hat/black-hat, preferência pelas
+                           bordas) e avisa de marca em mosaico (autocorrelação). Palpite: o usuário confere
     faces.py               YuNet (cv2.FaceDetectorYN): detect_faces (caixas relativas + score) →
                            blur_boxes (sensibilidade, margem, tipo); blur_faces = as duas
     geometry.py            crop, crop_relative, crop_to_ratio, rotate, straighten, resize, downscale
@@ -121,14 +132,21 @@ tests/                     pytest do core e do pipeline
 - Marca aprendida (alpha): exige fotos da MESMA proporção e marca na mesma posição; o α sai ~20% subestimado em testes sintéticos, ajustar a Força. Marcas grandes/espessas (> 4% do lado maior) confundem o estimador de piso (`traco_max`).
 - Molduras: nova moldura = função `(rgb, e, cor, texto) -> rgb` com `@_register(...)` em `core/frames.py`; aparece
   sozinha na aba (miniatura da foto) e no lote. Prévia da aba usa `set_preview(centered=True)` encolhido para caber.
+- Tipos de objeto (aba Fundo): o SegFormer ADE20K roda em 1/4 da resolução, então as bordas são grosseiras; por isso
+  só pessoas/veículos/barcos/animais/aviões passam pelo SAM. Fotos fora da distribuição (rosto em close, macro)
+  dão classes erradas. "Manter" vazio = parte da detecção principal (rembg) e subtrai o "Apagar".
+  Nova categoria = uma `Category(chave, rótulo, classes ADE20K)` em `core/objects.py` (o teste proíbe classe repetida).
+- Pré-análise da marca d'água é heurística: limiares calibrados em fundos sintéticos (liso/texturado/grão);
+  recalibrar com fotos reais se a sugestão errar muito (`suggest.py`: `nivel`, `grande`, grão 0,9/3,0).
 - Perfis da Marca d'água: valores iniciais, não regras; mexer em qualquer controle volta para "Personalizado".
   Novo perfil pronto = uma linha em `presets.PRESETS` (o teste valida faixas e se a receita aceita).
 - Barra lateral: largura inicial 400 px, redimensionável e lembrada (`saveState`); `_slider_row` mostra o valor ao lado
   do slider. Painel novo: use `ToolTabs.addTab` (aplica `compact`) e confira que `minimumSizeHint().width()` cabe
   em ~330 px (há teste em tests/test_ui_layout.py).
 - Zoom: roda do mouse = zoom; trackpad com dois dedos = mover; pinça ou Cmd+rolagem = zoom; teclas +/−;
-  botões na barra de status. Detecção automática de marca em UMA foto não existe de forma confiável:
-  o que há é "apertar aos traços" (assistido) e "aprender de uma pasta" (marca repetida).
+  botões na barra de status. Detecção de marca em UMA foto não é confiável:
+  há "Procurar a marca" (heurística sem IA, só palpite), "apertar aos traços" (assistido) e
+  "aprender de uma pasta" (marca repetida, o método mais seguro).
 - Botão Original é um interruptor (clique liga/desliga); ao editar ou trocar de aba ele desliga sozinho.
 - Lote com fundo transparente e saída JPG: o alpha é achatado em branco. Use PNG/WEBP.
 - Seleção de recorte: dá para desenhar e mover; ainda não há alças para redimensionar pelas bordas.

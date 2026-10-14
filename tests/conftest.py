@@ -72,6 +72,28 @@ def fake_sam(monkeypatch):
 
 
 @pytest.fixture
+def fake_objects(monkeypatch, tmp_path):
+    """SegFormer falso: devolve classes fixas (pessoa à esquerda, carro à direita, prédio no meio,
+    céu em cima), sem modelo nem download. Marca o modelo como baixado."""
+    from eggfotos.core import objects
+
+    class _Sess:
+        def run(self, _out, feeds):
+            _, _, h, w = feeds["pixel_values"].shape
+            hh, ww = h // 4, w // 4
+            logits = np.full((1, 150, hh, ww), -5.0, np.float32)
+            logits[0, 2, :hh // 4, :] = 5.0                          # céu (faixa superior)
+            logits[0, 12, hh // 4:, : ww // 3] = 5.0                 # pessoa (terço esquerdo)
+            logits[0, 1, hh // 4:, ww // 3: 2 * ww // 3] = 5.0       # prédio (terço do meio)
+            logits[0, 20, hh // 4:, 2 * ww // 3:] = 5.0              # carro (terço direito)
+            return [logits]
+
+    monkeypatch.setattr(objects, "_session", lambda modelo: _Sess())
+    monkeypatch.setattr(objects, "model_available", lambda modelo=objects.DEFAULT_MODEL: True)
+    return objects
+
+
+@pytest.fixture
 def marks_tmp(monkeypatch, tmp_path):
     """Pasta de modelos de marca isolada (não toca em ~/.eggfotos/marcas)."""
     from eggfotos.core import watermark

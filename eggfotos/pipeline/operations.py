@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core import adjustments, background, blur, faces, filters, frames, geometry, inpaint, watermark
+from ..core import adjustments, background, blur, faces, filters, frames, geometry, inpaint, objects, watermark
 
 
 @dataclass(frozen=True)
@@ -110,6 +110,20 @@ def apply_step(img: np.ndarray, step: dict) -> np.ndarray:
     return op.func(img, **params)
 
 
+def _objs_text(s: dict) -> str:
+    """', manter: pessoas; apagar: veículos' (vazio se o passo não usa tipos de objeto)."""
+    parts = []
+    for campo, rot in (("manter", "manter"), ("apagar", "apagar")):
+        try:
+            keys = objects.parse_keys(s.get(campo, ""))
+        except ValueError:
+            keys = [str(s.get(campo, ""))]
+        if keys:
+            parts.append(f"{rot}: " + ", ".join(objects.CATEGORIES[k].label.lower() if k in objects.CATEGORIES else k
+                                                 for k in keys))
+    return (", " + "; ".join(parts)) if parts else ""
+
+
 def describe_step(step: dict) -> str:
     """Texto curto para listas: 'Filtro — Vintage (80%)'."""
     try:
@@ -137,9 +151,9 @@ def describe_step(step: dict) -> str:
         return f"{op.label} — {blur.BLUR_TYPES[s['tipo']]}, {blur.SHAPES[s['forma']]}"
     if k == "remover_fundo":
         dest = "transparente" if s["fundo"] == "transparente" else f"cor {s['cor']}"
-        return f"{op.label} — {background.MODELS[s['modelo']][0]}, fundo {dest}"
+        return f"{op.label} — {background.MODELS[s['modelo']][0]}, fundo {dest}{_objs_text(s)}"
     if k == "desfocar_fundo":
-        return f"{op.label} — {background.MODELS[s['modelo']][0]}, intensidade {s['intensidade']}"
+        return f"{op.label} — {background.MODELS[s['modelo']][0]}, intensidade {s['intensidade']}{_objs_text(s)}"
     if k == "desfocar_rostos":
         return f"{op.label} — {blur.BLUR_TYPES[s['tipo']]}, sensibilidade {s['sensibilidade']}"
     if k == "remover_marca_regiao":
@@ -234,6 +248,19 @@ register(Operation(
     ),
 ))
 
+def _check_objects(step: dict) -> str | None:
+    try:
+        keep, drop = objects.parse_keys(step.get("manter", "")), objects.parse_keys(step.get("apagar", ""))
+    except ValueError as e:
+        return str(e)
+    if set(keep) & set(drop):
+        return "o mesmo tipo está em manter e em apagar"
+    modelo = step.get("objetos_modelo", objects.DEFAULT_MODEL)
+    if (keep or drop) and modelo in objects.MODELS and not objects.model_available(modelo):
+        return "o modelo de objetos ainda não foi baixado (aba Fundo → Objetos e pessoas)"
+    return None
+
+
 register(Operation(
     "remover_fundo", "Remover fundo", background.remove_background,
     (
@@ -245,8 +272,14 @@ register(Operation(
         Param("fundo", "Fundo", "choice", "transparente",
               choices=(("transparente", "Transparente (PNG/WEBP)"), ("cor", "Cor sólida"))),
         Param("cor", "Cor do fundo", "color", "#ffffff"),
+        Param("manter", "Manter só estes tipos (vazio = objeto principal)", "str", ""),
+        Param("apagar", "Apagar estes tipos", "str", ""),
+        Param("objetos_modelo", "Modelo de objetos", "choice", objects.DEFAULT_MODEL,
+              choices=tuple((k, v[2]) for k, v in objects.MODELS.items())),
     ),
-    "Exige o modelo baixado (aba Fundo). Fundo transparente: salve em PNG ou WEBP.",
+    "Exige o modelo baixado (aba Fundo). Fundo transparente: salve em PNG ou WEBP. "
+    "Tipos de objeto: "+", ".join(objects.category_keys())+".",
+    check=_check_objects,
 ))
 
 register(Operation(
@@ -257,8 +290,13 @@ register(Operation(
         Param("intensidade", "Intensidade do desfoque", "int", 50, 1, 100),
         Param("encolher", "Afinar (+) / engordar (−) borda", "int", 0, -100, 100),
         Param("suavizar", "Suavizar borda", "int", 20, 0, 100),
+        Param("manter", "Manter só estes tipos (vazio = objeto principal)", "str", ""),
+        Param("apagar", "Apagar estes tipos", "str", ""),
+        Param("objetos_modelo", "Modelo de objetos", "choice", objects.DEFAULT_MODEL,
+              choices=tuple((k, v[2]) for k, v in objects.MODELS.items())),
     ),
-    "Exige o modelo baixado (aba Fundo).",
+    "Exige o modelo baixado (aba Fundo). Tipos de objeto: "+", ".join(objects.category_keys())+".",
+    check=_check_objects,
 ))
 
 register(Operation(

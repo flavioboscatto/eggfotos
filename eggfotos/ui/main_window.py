@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import APP_NAME, ICON_PATH, __version__
-from ..core import background, faces, geometry, inpaint, segment, watermark
+from ..core import background, faces, geometry, inpaint, objects, segment, suggest, watermark
 from ..core.blur import blur_with_mask
 from ..core.history import History
 from ..errors import friendly_error
@@ -50,6 +50,11 @@ class MainWindow(QMainWindow):
         self._matte: np.ndarray | None = None  # máscara do "Fundo" (resolução total)
         self._matte_key: tuple[int | None, str] | None = None  # (uid do histórico, modelo)
         self._proxy_matte: np.ndarray | None = None
+        self._matte_objects: dict | None = None   # tipos de objeto que geraram a máscara (manter/apagar/modelo)
+        self._base_matte: np.ndarray | None = None  # detecção principal (rembg), base do "só apagar tipos"
+        self._base_key: tuple[int | None, str] | None = None
+        self._objmap: objects.ObjectMap | None = None
+        self._objmap_key: tuple[int | None, str] | None = None
         self._face_boxes: list | None = None  # rostos detectados (relativos) da foto atual
         self._face_uid: int | None = None
         self._wm_mask: np.ndarray | None = None   # marcação da aba Marca d'água (resolução total)
@@ -240,6 +245,9 @@ class MainWindow(QMainWindow):
         bp.clickUse.connect(self._bg_click_use)
         bp.clickClear.connect(self._bg_click_clear)
         bp.clickExit.connect(self._sam_reset)
+        bp.objectsDownloadRequested.connect(self._objs_download)
+        bp.objectsScanRequested.connect(self._objs_scan)
+        bp.objectsUseRequested.connect(self._objs_use)
         self.canvas.pointClicked.connect(self._on_point_clicked)
 
         fp = self.faces_panel
@@ -261,6 +269,8 @@ class MainWindow(QMainWindow):
         wp.downloadRequested.connect(self._download_lama)
         wp.snapRequested.connect(self._wm_snap)
         wp.snapUndoRequested.connect(self._wm_snap_undo)
+        wp.findRequested.connect(self._wm_find)
+        wp.suggestRequested.connect(self._wm_suggest)
         wp.saveTemplateRequested.connect(self._wm_save_template)
         wp.learnRequested.connect(self._wm_learn)
 
@@ -395,6 +405,7 @@ class MainWindow(QMainWindow):
         self.crop_panel.reset_angle()
         if idx == TAB_BACKGROUND:
             self.background_panel.refresh_model_status()
+            self.background_panel.refresh_objects_status()
         if idx == TAB_FACES:
             self.faces_panel.refresh_model_status()
         if idx == TAB_WATERMARK:
@@ -552,7 +563,10 @@ class MainWindow(QMainWindow):
     def _drop_matte(self) -> None:
         self._matte = self._proxy_matte = self._matte_key = None
         self._matte_manual = False
+        self._matte_objects = self._base_matte = self._base_key = None
+        self._objmap = self._objmap_key = None
         self.background_panel.reset()
+        self.background_panel.clear_objects()
 
     @property
     def _working(self) -> bool:
@@ -665,26 +679,115 @@ class MainWindow(QMainWindow):
             if self.history.current_uid != key[0]:  # a foto mudou enquanto detectava
                 return
             self._matte, self._matte_key = matte, key
+            self._base_matte, self._base_key = matte, key
             self._matte_manual = False
+            self._matte_objects = None
             self._proxy_matte = None
             self.background_panel.set_detected(True)
             self._preview_background(self.background_panel.values())
 
         self._run_task("Detectando o objeto…", lambda: background.compute_matte(img, modelo), done)
 
+    # --- tipos de objeto (pessoas, carros, prédios, barcos…)
+    def _objs_download(self, modelo: str) -> None:
+        r = QMessageBox.question(
+            self, APP_NAME,
+            f"Baixar o modelo '{objects.MODELS[modelo][2]}'?\n\n"
+            "Origem: huggingface.co/Xenova (SegFormer, licença aberta)\n"
+            f"Destino: {background.models_dir()}\n\nÉ feito uma única vez.")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+
+        def done(_):
+            self.background_panel.refresh_objects_status()
+            self.statusBar().showMessage("✓ Modelo de objetos baixado", 3000)
+
+        self._run_task("Baixando o modelo de objetos…", lambda: objects.download_model(modelo), done)
+
+    def _objs_scan(self, modelo: str) -> None:
+        if self.image is None:
+            return
+        img, uid = self.image, self.history.current_uid
+
+        def done(result):
+            if self.history.current_uid != uid:
+                return
+            om, achados = result
+            self._objmap, self._objmap_key = om, (uid, modelo)
+            self.background_panel.set_objects(achados)
+            if not achados:
+                QMessageBox.information(self, APP_NAME, "Não reconheci nenhum objeto conhecido nesta foto. "
+                                                       "Tente o modelo Preciso ou selecione por cliques.")
+
+        def job():
+            om = objects.scan(img, modelo)
+            return om, objects.presentes(om)
+
+        self._run_task("Reconhecendo os objetos…", job, done)
+
+    def _objs_use(self, opts: dict) -> None:
+        uid = self.history.current_uid
+        if self.image is None or self._objmap is None or self._objmap_key is None or self._objmap_key[0] != uid:
+            return
+        manter, apagar = opts["manter"], opts["apagar"]
+        if not manter and not apagar:
+            QMessageBox.information(self, APP_NAME, "Escolha ao menos um tipo para Manter ou Apagar.")
+            return
+        base = None
+        if not manter:
+            if self._base_matte is None or self._base_key is None or self._base_key[0] != uid:
+                QMessageBox.information(
+                    self, APP_NAME,
+                    "Para só apagar tipos, primeiro detecte o objeto principal (botão \"Detectar objeto\") "
+                    "— ou marque algum tipo como Manter.")
+                return
+            base = self._base_matte
+        keys = objects.parse_keys(manter) + objects.parse_keys(apagar)
+        if opts["refinar"] and any(k in objects.INSTANCE_KEYS for k in keys) and not segment.model_available():
+            self._ensure_sam_models(lambda: self._objs_use(opts))
+            return
+        img, om = self.image, self._objmap
+        cached = self._sam_emb if self._sam_uid == uid else None
+
+        def job():
+            emb = cached
+            if emb is None and opts["refinar"] and segment.model_available() \
+                    and any(k in objects.INSTANCE_KEYS for k in keys):
+                emb = segment.embed(img)
+            matte = objects.select(img, manter, apagar, opts["objetos_modelo"], opts["refinar"],
+                                   base=base, om=om, emb=emb)
+            return emb, matte
+
+        def done(result):
+            emb, matte = result
+            if self.history.current_uid != uid:
+                return
+            if emb is not None:
+                self._sam_emb, self._sam_uid = emb, uid
+            self._matte, self._proxy_matte = matte, None
+            self._matte_key = (uid, self.background_panel.modelo())
+            self._matte_manual = False
+            self._matte_objects = {"manter": manter, "apagar": apagar, "objetos_modelo": opts["objetos_modelo"]}
+            self.background_panel.set_detected(True)
+            self._preview_background(self.background_panel.values())
+
+        self._run_task("Selecionando pelos tipos de objeto…", job, done)
+
     def _matte_ready(self, modelo: str) -> bool:
         return (self._matte is not None and self._matte_key is not None
                 and self._matte_key[0] == self.history.current_uid
-                and (self._matte_manual or self._matte_key[1] == modelo))
+                and (self._matte_manual or self._matte_key[1] == modelo
+                     or bool(self._matte_objects and self._matte_objects["manter"])))
 
     def _background_step(self, values: dict) -> dict:
         """Step reproduzível correspondente ao estado do painel Fundo."""
+        objs = dict(self._matte_objects or {})
         if values["fundo"] == "desfoque":
             return get_operation("desfocar_fundo").new_step(
                 modelo=values["modelo"], intensidade=values["desfoque"],
-                encolher=values["encolher"], suavizar=values["suavizar"])
+                encolher=values["encolher"], suavizar=values["suavizar"], **objs)
         step = get_operation("remover_fundo").new_step(
-            **{k: v for k, v in values.items() if k != "desfoque"})
+            **{k: v for k, v in values.items() if k != "desfoque"}, **objs)
         return step
 
     def _render_background(self, img: np.ndarray, matte: np.ndarray, values: dict) -> np.ndarray:
@@ -883,6 +986,7 @@ class MainWindow(QMainWindow):
         self._matte, self._proxy_matte = self._sam_mask, None
         self._matte_key = (self.history.current_uid, self.background_panel.modelo())
         self._matte_manual = True
+        self._matte_objects = None
         self.background_panel.set_detected(True)
         self._sam_reset()
         self._preview_background(self.background_panel.values())
@@ -1077,6 +1181,44 @@ class MainWindow(QMainWindow):
 
         self._run_task("Procurando os traços da marca…",
                        lambda: inpaint.snap_to_strokes(img, loose, **opts), done)
+
+    def _wm_find(self) -> None:
+        """Procura regiões que parecem marca d'água (sem IA) e as marca como retângulos soltos."""
+        if self.image is None:
+            return
+        img = self.image
+
+        def done(res):
+            nota = ("\n\nParece haver um padrão repetido pela foto toda (marca em mosaico): marque a "
+                    "foto inteira com o pincel largo ou use \"Aprender marca de uma pasta\".") if res.repetida else ""
+            if not res.itens:
+                QMessageBox.information(
+                    self, APP_NAME,
+                    "Não achei nenhuma região que se destaque como marca d'água (a foto pode ter muita "
+                    "textura ou a marca ser grande/colorida). Marque à mão com o pincel ou o retângulo." + nota)
+                return
+            for c in res.itens:
+                x, y, w, h = c.rect()
+                self._wm_add_mask(inpaint.rect_mask(img.shape, x, y, w, h), brush=False, rect=c.rect())
+            lugares = "; ".join(c.lugar for c in res.itens)
+            self.statusBar().showMessage(
+                f"{len(res.itens)} região(ões) marcada(s): {lugares}. Confira — Ctrl+Z tira uma por vez.", 9000)
+            if nota:
+                QMessageBox.information(self, APP_NAME, nota.strip())
+
+        self._run_task("Procurando a marca d'água…", lambda: suggest.find_candidates(img), done)
+
+    def _wm_suggest(self) -> None:
+        if self.image is None or self._wm_mask is None:
+            return
+        img, mask = self.image, self._wm_mask
+        lama = inpaint.lama_available()
+
+        def done(sug):
+            self.wm_panel.apply_suggestion(sug)
+            self.statusBar().showMessage("Sugestão aplicada aos controles — ajuste se quiser.", 6000)
+
+        self._run_task("Analisando o fundo ao redor…", lambda: suggest.suggest_settings(img, mask, lama), done)
 
     def _wm_snap_undo(self) -> None:
         if self._wm_loose is None:

@@ -172,6 +172,17 @@ def apply_matte(
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
+def matte_for(img: np.ndarray, modelo: str = DEFAULT_MODEL, manter: str = "", apagar: str = "",
+              objetos_modelo: str = "rapido") -> np.ndarray:
+    """Máscara de ponta a ponta. Sem tipos de objeto, é a detecção principal (rembg). Com `manter`,
+    fica só o que for desses tipos (sem rembg); só com `apagar`, tira esses tipos da detecção principal."""
+    if not (manter or apagar):
+        return compute_matte(img, modelo)
+    from . import objects
+    base = None if objects.parse_keys(manter) else compute_matte(img, modelo)
+    return objects.select(img, manter, apagar, objetos_modelo, base=base)
+
+
 def remove_background(
     img: np.ndarray,
     modelo: str = DEFAULT_MODEL,
@@ -180,9 +191,13 @@ def remove_background(
     descontaminar: bool = True,
     fundo: str = BACKGROUND_TRANSPARENT,
     cor: str = "#ffffff",
+    manter: str = "",
+    apagar: str = "",
+    objetos_modelo: str = "rapido",
 ) -> np.ndarray:
     """Remove o fundo de ponta a ponta (usado pelo lote)."""
-    return apply_matte(img, compute_matte(img, modelo), encolher, suavizar, descontaminar, fundo, cor)
+    matte = matte_for(img, modelo, manter, apagar, objetos_modelo)
+    return apply_matte(img, matte, encolher, suavizar, descontaminar, fundo, cor)
 
 
 def blur_background(
@@ -210,6 +225,10 @@ def blur_background_auto(
     intensidade: float = 50,
     encolher: float = 0,
     suavizar: float = 20,
+    manter: str = "",
+    apagar: str = "",
+    objetos_modelo: str = "rapido",
 ) -> np.ndarray:
     """Desfoque de fundo de ponta a ponta (usado pelo lote)."""
-    return blur_background(img, compute_matte(img, modelo), intensidade, encolher, suavizar)
+    return blur_background(img, matte_for(img, modelo, manter, apagar, objetos_modelo),
+                           intensidade, encolher, suavizar)

@@ -15,6 +15,7 @@ from ..core.adjustments import ADJUSTMENT_KEYS, ADJUSTMENT_LABELS, adjustment_ra
 from ..core.background import DEFAULT_MODEL, MODELS, model_available
 from ..core import faces as faces_core
 from ..core import inpaint as inpaint_core
+from ..core import objects as objects_core
 from ..core import presets
 from ..core.inpaint import METHODS as INPAINT_METHODS
 from ..core.inpaint import POLARITIES
@@ -453,6 +454,9 @@ class BackgroundPanel(QWidget):
     clickUse = pyqtSignal()
     clickClear = pyqtSignal()
     clickExit = pyqtSignal()
+    objectsDownloadRequested = pyqtSignal(str)
+    objectsScanRequested = pyqtSignal(str)
+    objectsUseRequested = pyqtSignal(dict)
     previewChanged = pyqtSignal(dict)
     applyRequested = pyqtSignal(dict)
     cancelRequested = pyqtSignal()
@@ -493,6 +497,40 @@ class BackgroundPanel(QWidget):
         self.box_click.setVisible(False)
         f1.addWidget(self.box_click)
         lay.addWidget(g1)
+
+        self.g_obj = QGroupBox("Ou escolha por tipo de objeto")
+        fo = QVBoxLayout(self.g_obj)
+        fo.addWidget(_hint("Reconhece pessoas, carros, prédios, casas, barcos, animais, árvores, céu… "
+                           "Para cada tipo: Manter (fica na foto), Apagar (vira fundo) ou Ignorar. "
+                           "Havendo tipos em Manter, só eles ficam; sem nenhum, vale a detecção principal "
+                           "(passo 1) menos o que estiver em Apagar."))
+        self.cmb_omodelo = QComboBox()
+        for k, (_, _, label) in objects_core.MODELS.items():
+            self.cmb_omodelo.addItem(label, k)
+        self.lbl_omodel = QLabel()
+        self.lbl_omodel.setObjectName("hint")
+        self.btn_odownload = QPushButton("Baixar modelo de objetos…")
+        self.btn_oscan = QPushButton("Reconhecer objetos")
+        self.btn_oscan.setObjectName("primary")
+        for w in (self.cmb_omodelo, self.lbl_omodel, self.btn_odownload, self.btn_oscan):
+            fo.addWidget(w)
+        self.box_objs = QWidget()
+        self._objs_form = QFormLayout(self.box_objs)
+        self._objs_form.setContentsMargins(0, 0, 0, 0)
+        self._obj_combos: dict[str, QComboBox] = {}
+        self.box_objs.setVisible(False)
+        fo.addWidget(self.box_objs)
+        self.chk_orefine = QCheckBox("Refinar bordas de pessoas e veículos (MobileSAM)")
+        self.chk_orefine.setChecked(True)
+        self.chk_orefine.setToolTip("Usa o MobileSAM para afiar o contorno de pessoas, veículos, barcos e "
+                                    "animais. Prédios, céu e árvores ficam com a máscara do modelo de objetos.")
+        self.chk_orefine.setVisible(False)
+        self.btn_ouse = QPushButton("Usar esta seleção")
+        self.btn_ouse.setObjectName("primary")
+        self.btn_ouse.setVisible(False)
+        fo.addWidget(self.chk_orefine)
+        fo.addWidget(self.btn_ouse)
+        lay.addWidget(self.g_obj)
 
         self.g2 = QGroupBox("2. Refinar")
         f2 = QFormLayout(self.g2)
@@ -548,6 +586,10 @@ class BackgroundPanel(QWidget):
         self.cmb_modelo.currentIndexChanged.connect(lambda _: self.refresh_model_status())
         self.btn_download.clicked.connect(lambda: self.downloadRequested.emit(self.modelo()))
         self.btn_detect.clicked.connect(lambda: self.detectRequested.emit(self.modelo()))
+        self.cmb_omodelo.currentIndexChanged.connect(lambda _: self.refresh_objects_status())
+        self.btn_odownload.clicked.connect(lambda: self.objectsDownloadRequested.emit(self.omodelo()))
+        self.btn_oscan.clicked.connect(lambda: self.objectsScanRequested.emit(self.omodelo()))
+        self.btn_ouse.clicked.connect(lambda: self.objectsUseRequested.emit(self.objects_values()))
         self.btn_click.clicked.connect(self.clickModeRequested)
         self.btn_click_use.clicked.connect(self.clickUse)
         self.btn_click_clear.clicked.connect(self.clickClear)
@@ -556,9 +598,47 @@ class BackgroundPanel(QWidget):
         self.btn_cancel.clicked.connect(self._on_cancel)
         self.set_detected(False)
         self.refresh_model_status()
+        self.refresh_objects_status()
 
     def modelo(self) -> str:
         return self.cmb_modelo.currentData()
+
+    # ------------------------------------------------ tipos de objeto
+    def omodelo(self) -> str:
+        return self.cmb_omodelo.currentData()
+
+    def refresh_objects_status(self) -> None:
+        ok = objects_core.model_available(self.omodelo())
+        self.lbl_omodel.setText("✓ Modelo baixado" if ok else "Modelo ainda não baixado")
+        self.btn_odownload.setVisible(not ok)
+        self.btn_oscan.setEnabled(ok)
+
+    def set_objects(self, items: list[tuple[str, float, int]] | None) -> None:
+        """Mostra os tipos encontrados [(chave, fração, quantidade)]; None limpa a lista."""
+        while self._objs_form.rowCount():
+            self._objs_form.removeRow(0)
+        self._obj_combos.clear()
+        for key, frac, n in items or []:
+            cmb = QComboBox()
+            for data, label in (("ignorar", "Ignorar"), ("manter", "Manter"), ("apagar", "Apagar")):
+                cmb.addItem(label, data)
+            if key == "pessoas":
+                cmb.setCurrentIndex(1)       # pessoas são o caso mais comum: já vêm marcadas para manter
+            qtd = f"{n} " + ("objeto" if n == 1 else "objetos")
+            self._objs_form.addRow(f"{objects_core.category_label(key)} · {frac * 100:.0f}% · {qtd}", cmb)
+            self._obj_combos[key] = cmb
+        has = bool(self._obj_combos)
+        self.box_objs.setVisible(has)
+        self.chk_orefine.setVisible(has)
+        self.btn_ouse.setVisible(has)
+
+    def clear_objects(self) -> None:
+        self.set_objects(None)
+
+    def objects_values(self) -> dict:
+        pick = lambda what: ",".join(k for k, c in self._obj_combos.items() if c.currentData() == what)  # noqa: E731
+        return {"manter": pick("manter"), "apagar": pick("apagar"), "objetos_modelo": self.omodelo(),
+                "refinar": self.chk_orefine.isChecked()}
 
     def values(self) -> dict:
         """Estado do painel. `fundo` = transparente | cor | desfoque (a janela escolhe o step)."""
@@ -740,10 +820,28 @@ class WatermarkPanel(QWidget):
     learnRequested = pyqtSignal()
     snapRequested = pyqtSignal(dict)
     snapUndoRequested = pyqtSignal()
+    findRequested = pyqtSignal()
+    suggestRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
+
+        g0 = QGroupBox("Ajuda automática (sem IA)")
+        f0 = QVBoxLayout(g0)
+        self.btn_find = QPushButton("Procurar a marca na foto")
+        self.btn_find.setToolTip("Procura regiões com traços finos e coerentes (letras, logotipos), de "
+                                 "preferência perto das bordas, e já as marca. É um palpite: confira.")
+        self.btn_suggest = QPushButton("Sugerir ajustes para a área marcada")
+        self.btn_suggest.setToolTip("Mede o fundo em volta da marcação (textura, grão, rostos por perto) e "
+                                    "preenche os controles da seção 2.")
+        self.lbl_sugestao = QLabel("")
+        self.lbl_sugestao.setObjectName("hint")
+        self.lbl_sugestao.setWordWrap(True)
+        self.lbl_sugestao.setVisible(False)
+        for w in (self.btn_find, self.btn_suggest, self.lbl_sugestao):
+            f0.addWidget(w)
+        lay.addWidget(g0)
 
         g1 = QGroupBox("1. Marque a área a apagar")
         f1 = QVBoxLayout(g1)
@@ -876,6 +974,8 @@ class WatermarkPanel(QWidget):
         self.btn_snap.clicked.connect(lambda: self.snapRequested.emit(
             {"polaridade": self.cmb_pol.currentData(), "sensibilidade": self.sl_sens.value()}))
         self.btn_snap_undo.clicked.connect(self.snapUndoRequested)
+        self.btn_find.clicked.connect(self.findRequested)
+        self.btn_suggest.clicked.connect(self.suggestRequested)
         self.btn_learn.clicked.connect(self.learnRequested)
         self.btn_download.clicked.connect(self.downloadRequested)
         self.btn_apply.clicked.connect(lambda: self.applyRequested.emit(self.values()))
@@ -1005,6 +1105,20 @@ class WatermarkPanel(QWidget):
         self.btn_clear.setEnabled(count > 0)
         self.btn_save_tpl.setEnabled(count > 0)
         self.btn_snap.setEnabled(count > 0)
+        self.btn_suggest.setEnabled(count > 0)
+
+    def apply_suggestion(self, sug) -> None:
+        """Preenche os controles com a sugestão da pré-análise e mostra o porquê."""
+        v = sug.values
+        self.cmb_metodo.setCurrentIndex(max(0, self.cmb_metodo.findData(v["metodo"])))
+        for sl, key in ((self.sl_expandir, "expandir"), (self.sl_raio, "raio"),
+                        (self.sl_contexto, "contexto"), (self.sl_emenda, "emenda"),
+                        (self.sl_grao, "grao_forca"), (self.sl_sens, "sensibilidade")):
+            sl.setValue(int(v[key]))
+        self.cmb_pol.setCurrentIndex(max(0, self.cmb_pol.findData(sug.polaridade)))
+        self.refresh_model_status()
+        self.lbl_sugestao.setText("Sugestão aplicada:\n" + sug.resumo())
+        self.lbl_sugestao.setVisible(True)
 
     def set_snap_undo(self, available: bool) -> None:
         self.btn_snap_undo.setEnabled(available)
