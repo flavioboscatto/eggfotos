@@ -24,6 +24,7 @@ import numpy as np
 
 from ..core.geometry import downscale
 from ..core.image_io import SUPPORTED_EXTENSIONS, load_image, save_image
+from ..errors import friendly_error
 from .recipe import Recipe
 
 
@@ -124,7 +125,7 @@ def process_one(src: str, dst: str, recipe_dict: dict) -> ItemResult:
                    keep_metadata=recipe.saida.manter_exif)
         return ItemResult(src, dst, "ok", "", time.perf_counter() - t0)
     except Exception as e:  # noqa: BLE001 — o erro vai para o log, o lote continua
-        return ItemResult(src, dst, "erro", f"{type(e).__name__}: {e}", time.perf_counter() - t0)
+        return ItemResult(src, dst, "erro", friendly_error(e), time.perf_counter() - t0)
 
 
 ProgressCallback = Callable[[int, int, ItemResult], None]
@@ -248,10 +249,10 @@ def preview_recipe(paths: list[Path], recipe: Recipe, max_side: int = 640) -> li
             img, _ = load_image(p)
             small, _ = downscale(img, max_side)
         except Exception as e:  # noqa: BLE001
-            out.append((np.zeros((10, 10, 3), np.uint8), f"Erro ao abrir: {e}"))
+            out.append((np.zeros((10, 10, 3), np.uint8), f"Erro ao abrir: {friendly_error(e)}"))
             continue
         try:
             out.append((small, recipe.apply(small)))
         except Exception as e:  # noqa: BLE001
-            out.append((small, f"{type(e).__name__}: {e}"))
+            out.append((small, friendly_error(e)))
     return out

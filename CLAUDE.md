@@ -1,7 +1,9 @@
 # CLAUDE.md — EggFotos
 
 Editor de fotos desktop em Python + PyQt6, uso pessoal do autor.
-Interface e mensagens em **português do Brasil**.
+Interface e mensagens em **português do Brasil**: os botões padrão do Qt vêm das traduções do próprio
+Qt (`install_portuguese` em `ui/app.py`) e os erros de bibliotecas passam por `eggfotos/errors.py::friendly_error`
+(também no log CSV do lote). Texto novo na UI sempre em português; erro novo de biblioteca: traduzir lá.
 
 ## Executar e testar
 

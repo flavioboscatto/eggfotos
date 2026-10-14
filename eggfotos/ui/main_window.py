@@ -17,6 +17,7 @@ from .. import APP_NAME, __version__
 from ..core import background, faces, geometry, inpaint, segment, watermark
 from ..core.blur import blur_with_mask
 from ..core.history import History
+from ..errors import friendly_error
 from ..core.image_io import OPEN_FILTER, is_supported, load_image, save_image
 from ..pipeline.operations import apply_step, get_operation
 from ..pipeline.recipe import Recipe, recipes_dir, safe_filename
@@ -306,7 +307,7 @@ class MainWindow(QMainWindow):
         try:
             return func()
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, APP_NAME, f"Não foi possível aplicar:\n{e}")
+            QMessageBox.warning(self, APP_NAME, f"Não foi possível concluir a operação:\n{friendly_error(e)}")
             return None
         finally:
             QApplication.restoreOverrideCursor()
@@ -327,7 +328,7 @@ class MainWindow(QMainWindow):
         try:
             render()
         except Exception as e:  # noqa: BLE001
-            self.statusBar().showMessage(f"Erro na prévia: {e}", 4000)
+            self.statusBar().showMessage(f"Erro na prévia: {friendly_error(e)}", 4000)
 
     def _cancel_preview(self) -> None:
         if self._pending is not None and self.image is not None:
@@ -1046,7 +1047,7 @@ class MainWindow(QMainWindow):
             img, meta = load_image(path)
         except Exception as e:  # noqa: BLE001
             QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, APP_NAME, f"Não foi possível abrir {path.name}:\n{e}")
+            QMessageBox.warning(self, APP_NAME, f"Não foi possível abrir {path.name}:\n{friendly_error(e)}")
             return
         QApplication.restoreOverrideCursor()
         self.path, self.meta = path, meta

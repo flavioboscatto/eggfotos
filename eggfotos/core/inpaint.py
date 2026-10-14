@@ -174,7 +174,7 @@ def download_lama() -> Path:
             f.write(chunk)
     if tmp.stat().st_size < 1_000_000:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError("Download do modelo LaMa incompleto.")
+        raise RuntimeError("O download do modelo LaMa não terminou. Tente de novo.")
     tmp.replace(dest)
     return dest
 

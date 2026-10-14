@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core import watermark
+from ..errors import friendly_error
 from .color_picker import choose_color, style_color_button
 from ..pipeline.operations import REGISTRY, Operation, describe_step, get_operation, normalize_step
 from ..pipeline.recipe import (
@@ -446,7 +447,7 @@ class BatchDialog(QDialog):
         try:
             self._apply_recipe(Recipe.load(path))
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "Receita", f"Não foi possível carregar:\n{e}")
+            QMessageBox.warning(self, "Receita", f"Não foi possível carregar a receita:\n{friendly_error(e)}")
 
     def _save_recipe(self) -> None:
         r = self.recipe()

@@ -48,7 +48,7 @@ def download_model() -> Path:
         f.write(r.read())
     if tmp.stat().st_size < 10_000:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError("Download do modelo de rostos incompleto.")
+        raise RuntimeError("O download do modelo de rostos não terminou. Tente de novo.")
     tmp.replace(dest)
     return dest
 

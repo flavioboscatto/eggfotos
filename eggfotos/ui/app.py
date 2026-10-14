@@ -4,9 +4,11 @@ from __future__ import annotations
 import sys
 import traceback
 
+from PyQt6.QtCore import QLibraryInfo, QLocale, QTranslator
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from .. import APP_NAME
+from ..errors import friendly_error
 from .main_window import MainWindow
 from .styles import STYLESHEET
 
@@ -19,14 +21,30 @@ def _install_excepthook() -> None:
         print(text, file=sys.stderr)
         app = QApplication.instance()
         if app is not None:
-            box = QMessageBox(QMessageBox.Icon.Critical, APP_NAME, f"Erro inesperado:\n{exc}")
+            box = QMessageBox(QMessageBox.Icon.Critical, APP_NAME, f"Erro inesperado:\n{friendly_error(exc)}")
             box.setDetailedText(text)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok)
             box.exec()
     sys.excepthook = hook
 
 
+def install_portuguese(app: QApplication) -> list[QTranslator]:
+    """Botões e diálogos padrão do Qt (Sim/Não, Salvar, Cancelar, seletor de cores…) em português
+    do Brasil, e números com vírgula decimal. Devolve os tradutores (precisam ficar referenciados)."""
+    QLocale.setDefault(QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil))
+    folder = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    translators = []
+    for name in ("qtbase_pt_BR", "qt_pt_BR"):
+        t = QTranslator(app)
+        if t.load(name, folder):
+            app.installTranslator(t)
+            translators.append(t)
+    return translators
+
+
 def run(argv: list[str]) -> int:
     app = QApplication(argv)
+    app._translators = install_portuguese(app)  # noqa: SLF001 — mantém os tradutores vivos
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
     app.setStyle("Fusion")

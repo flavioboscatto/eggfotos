@@ -8,6 +8,7 @@ from typing import Callable
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from ..errors import friendly_error
 from ..core.filters import apply_filter, filter_keys
 from ..pipeline.recipe import Recipe
 from ..pipeline.runner import BatchJob, BatchRunner, preview_recipe
@@ -72,7 +73,7 @@ class BatchWorker(QThread):
             )
             self.finishedReport.emit(runner.run())
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(str(e))
+            self.failed.emit(friendly_error(e))
 
 
 class TaskWorker(QThread):
@@ -88,4 +89,4 @@ class TaskWorker(QThread):
         try:
             self.done.emit(self._func())
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(str(e))
+            self.failed.emit(friendly_error(e))

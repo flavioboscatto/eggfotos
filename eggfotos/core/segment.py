@@ -61,7 +61,7 @@ def download_models() -> None:
                 f.write(chunk)
         if tmp.stat().st_size < 1_000_000:
             tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"Download de {name} incompleto.")
+            raise RuntimeError(f"O download de {name} não terminou. Tente de novo.")
         tmp.replace(dest)
 
 
